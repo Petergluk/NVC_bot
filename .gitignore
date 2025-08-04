@@ -1,0 +1,27 @@
+# NVC_bot\.gitignore
+# Файл с секретными переменными окружения
+.env
+
+# База данных SQLite
+*.sqlite3
+
+# Лог-файлы
+*.log
+
+# Директории кэша Python
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+
+# Директории виртуального окружения
+.venv/
+venv/
+env/
+
+# Файлы IDE
+.idea/
+.vscode/
+
+# Специфичные для Windows/macOS
+Thumbs.db
+.DS_Store

@@ -1,0 +1,58 @@
+# NVC_bot/pyproject.toml
+# version: 1.4
+# 2025-07-29T16:40:00Z
+#
+# Version 1.4:
+# - ADD: Добавлен параметр `package-mode = false` для корректной работы `poetry install`.
+#   Это указывает, что проект является приложением, а не устанавливаемой библиотекой.
+#
+# Version 1.3:
+# - CHANGE: Обновлена версия google-generativeai до ^0.8.5.
+
+[tool.poetry]
+name = "weidehanbot"
+version = "1.0.0"
+description = "Telegram-бот для осознанной коммуникации"
+authors = ["WeiDeHan Team"]
+package-mode = false  # ADD: Явно указываем, что это не пакет, а приложение.
+
+[tool.poetry.dependencies]
+python = ">=3.10,<3.14"
+python-dotenv = "^1.0"
+pydantic-settings = "^2.1"
+python-telegram-bot = "^21.0"
+aiosqlite = "^0.20"
+google-generativeai = "^0.8.5"
+
+[tool.poetry.group.dev.dependencies]
+black = "^24.4"
+isort = "^5.13"
+flake8 = "^7.0"
+mypy = "^1.10"
+pytest = "^8.2"
+
+[tool.black]
+line-length = 100
+
+[tool.isort]
+profile = "black"
+
+[tool.mypy]
+strict = true
+plugins = ["pydantic.mypy"]
+
+# --- РАЗДЕЛ ДЛЯ НАСТРОЕК PYTEST ---
+[tool.pytest.ini_options]
+# Настройка асинхронного режима для тестов
+asyncio_mode = "strict"
+
+# Фильтры для предупреждений (warnings)
+filterwarnings = [
+    # Игнорировать специфичные DeprecationWarning от библиотеки google,
+    # так как мы не можем на них повлиять.
+    "ignore::DeprecationWarning:google._upb._message",
+]
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
