@@ -1,9 +1,14 @@
 # NVC_bot/bot/handlers/callbacks/items.py
-# version: 1.7.0
-# 2025-07-28T23:00:00Z
+# version: 1.8.0
+# 2025-07-30T11:45:00Z
 """
 Обработчики инлайн-кнопок для управления триггерами и исключениями модерации.
 
+Version 1.8.0:
+- REFACTOR: Методы `request_items_add` и `request_items_delete` были переработаны
+            для устранения дублирования кода. Введен новый приватный метод
+            `_request_item_modification_input`, который централизует логику
+            запроса ввода от пользователя.
 Version 1.7.0:
 - REFACTOR: Изменена логика `_format_list_for_display` для решения проблемы
             с лимитом на количество "сущностей" (entities) в Telegram.
@@ -74,35 +79,56 @@ class ItemCallbackHandler:
     async def show_exceptions_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return await self._show_item_management_menu(update, context, "exceptions")
 
-    async def request_items_add(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    async def _request_item_modification_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE, item_type: str, action: str) -> int:
+        """
+        Универсальный метод для запроса ввода от пользователя при добавлении или удалении элементов.
+
+        Args:
+            update (Update): Объект обновления Telegram.
+            context (ContextTypes.DEFAULT_TYPE): Контекст бота.
+            item_type (str): Тип элемента ('triggers' или 'exceptions').
+            action (str): Действие ('add' или 'delete').
+
+        Returns:
+            int: Следующее состояние для ConversationHandler.
+        """
         query = update.callback_query
         await self._safe_answer_query(query)
-        cb_data = query.data
-        
-        text, return_state = "", 0
-        if cb_data == CallbackPrefix.TRIGGERS_ADD:
-            text, return_state = "Отправьте триггеры для добавления\\.\nФормат: `Категория: слово1, слово2`\nИли просто `слово1, слово2` для категории 'general'\\.", AWAIT_TRIGGERS_TO_ADD
-        elif cb_data == CallbackPrefix.EXCEPTIONS_ADD:
-            text, return_state = "Отправьте фразы\\-исключения для добавления\\.\nФормат: `Категория: фраза 1, фраза 2`\nИли просто `фраза 1, фраза 2` для категории 'general'\\.", AWAIT_EXCEPTIONS_TO_ADD
-        
+
+        # Словарь для хранения текстов и состояний, чтобы избежать дублирования if/else
+        config = {
+            "triggers": {
+                "add": ("Отправьте триггеры для добавления", AWAIT_TRIGGERS_TO_ADD),
+                "delete": ("Отправьте триггеры для удаления", AWAIT_TRIGGERS_TO_DELETE),
+            },
+            "exceptions": {
+                "add": ("Отправьте фразы-исключения для добавления", AWAIT_EXCEPTIONS_TO_ADD),
+                "delete": ("Отправьте фразы-исключения для удаления", AWAIT_EXCEPTIONS_TO_DELETE),
+            }
+        }
+
+        base_text, return_state = config[item_type][action]
+
+        # Добавляем детали к базовому тексту
+        if action == 'add':
+            full_text = f"{base_text}\\.\nФормат: `Категория: слово1, слово2`\nИли просто `слово1, слово2` для категории 'general'\\."
+        else:  # 'delete'
+            full_text = f"{base_text}, перечислив их через запятую\\."
+
         context.user_data['original_update'] = update
-        await self._safe_edit_message(query, text, reply_markup=None, parse_mode=ParseMode.MARKDOWN_V2)
+        await self._safe_edit_message(query, full_text, reply_markup=None, parse_mode=ParseMode.MARKDOWN_V2)
+        
         return return_state
 
+    async def request_items_add(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        """Запрашивает у пользователя элементы (триггеры/исключения) для добавления."""
+        item_type = "triggers" if update.callback_query.data == CallbackPrefix.TRIGGERS_ADD else "exceptions"
+        return await self._request_item_modification_input(update, context, item_type, "add")
+
     async def request_items_delete(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        query = update.callback_query
-        await self._safe_answer_query(query)
-        cb_data = query.data
-        
-        text, return_state = "", 0
-        if cb_data == CallbackPrefix.TRIGGERS_DELETE:
-            text, return_state = "Отправьте триггеры для удаления, перечислив их через запятую\\.", AWAIT_TRIGGERS_TO_DELETE
-        elif cb_data == CallbackPrefix.EXCEPTIONS_DELETE:
-            text, return_state = "Отправьте фразы\\-исключения для удаления, перечислив их через запятую\\.", AWAIT_EXCEPTIONS_TO_DELETE
-            
-        context.user_data['original_update'] = update
-        await self._safe_edit_message(query, text, reply_markup=None, parse_mode=ParseMode.MARKDOWN_V2)
-        return return_state
+        """Запрашивает у пользователя элементы (триггеры/исключения) для удаления."""
+        item_type = "triggers" if update.callback_query.data == CallbackPrefix.TRIGGERS_DELETE else "exceptions"
+        return await self._request_item_modification_input(update, context, item_type, "delete")
 
     async def _handle_add_logic(self, update: Update, context: ContextTypes.DEFAULT_TYPE, item_type: str) -> int:
         msg = update.message

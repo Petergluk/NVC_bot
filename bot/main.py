@@ -1,13 +1,17 @@
 # NVC_bot/bot/main.py
-# version: 3.0.0
-# 2025-07-28T11:00:00Z
+# version: 3.3.0
+# 2025-08-14T10:00:00Z
 """
 Основной файл для инициализации и запуска Telegram-бота.
 
-Version 3.0.0:
-- ARCH: Архитектура обработчиков восстановлена до исходной, стабильной версии.
-- ADD: Возвращен единый глобальный `MessageHandler` для `user_handlers.handle_message`.
-- REMOVE: Удалены группы и сложные приоритеты обработчиков.
+Version 3.3.0:
+- REFACTOR: В `GeminiService` теперь передается объект `Application`
+            для отправки служебных уведомлений при сбоях API.
+
+Version 3.2.0:
+- FIX: Заменен несуществующий фильтр `filters.EDITED` на корректный
+       `filters.UpdateType.EDITED_MESSAGE` для правильной обработки
+       отредактированных сообщений.
 """
 import asyncio
 import html
@@ -84,15 +88,17 @@ async def main() -> None:
     await db.initialize()
     await db.populate_defaults()
 
-    gemini_service = GeminiService(
-        model_names={"pro": settings.GEMINI_PRO_MODEL, "flash": settings.GEMINI_FLASH_MODEL, "lite": settings.GEMINI_LITE_MODEL},
-        db=db
-    )
-    moderation_service = ModerationService(db, gemini_service)
-
     request = HTTPXRequest(connect_timeout=10.0, read_timeout=30.0, write_timeout=30.0)
     app = Application.builder().token(settings.TELEGRAM_BOT_TOKEN).job_queue(None).request(request).build()
     app.add_error_handler(error_handler)
+
+    # REFACTOR: Инъецируем 'app' в сервис для отправки уведомлений
+    gemini_service = GeminiService(
+        model_names={"pro": settings.GEMINI_PRO_MODEL, "flash": settings.GEMINI_FLASH_MODEL, "lite": settings.GEMINI_LITE_MODEL},
+        db=db,
+        app=app
+    )
+    moderation_service = ModerationService(db, gemini_service)
 
     user_handlers = UserHandlers(db, gemini_service, moderation_service)
     admin_handlers = AdminHandlers(db, gemini_service)
@@ -100,22 +106,18 @@ async def main() -> None:
     
     admin_handlers.set_callback_handlers(callback_handlers)
 
-    # ConversationHandler для меню настроек. Имеет приоритет 0 по умолчанию.
     conv_handler = setup_conversations(admin_handlers, callback_handlers)
     app.add_handler(conv_handler)
     
-    # Обработчики команд
     app.add_handler(CommandHandler("start", user_handlers.start_command))
     app.add_handler(CommandHandler("help", user_handlers.help_command))
     app.add_handler(CommandHandler("stats", admin_handlers.show_stats_command))
     app.add_handler(CommandHandler("warnings", admin_handlers.manage_warnings))
     
-    # Обработчик входа новых участников
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, user_handlers.greet_new_members))
 
-    # Глобальный обработчик всех текстовых сообщений.
-    # ConversationHandler имеет более высокий приоритет и перехватит сообщение первым, если диалог активен.
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, user_handlers.handle_message))
+    app.add_handler(MessageHandler(filters.UpdateType.EDITED_MESSAGE & filters.TEXT & ~filters.COMMAND, user_handlers.handle_edited_message))
 
     try:
         await app.initialize()

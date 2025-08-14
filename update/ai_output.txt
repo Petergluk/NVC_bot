@@ -1,582 +1,590 @@
-*Thinking...*
+Вы задали абсолютно верный и очень важный вопрос. Синхронизация статистики с циклом списания квот API — это ключевой аспект для корректного контроля расходов. Если границы дня в нашей статистике и у Google не совпадают, то данные о "сегодняшнем" расходе будут вводить в заблуждение.
 
-> **Implementing the Strategy**
-> 
-> I'm currently focused on executing the steps laid out. I've zeroed in on the `gemini.py` file, specifically the `generate_response` function. My priority is to gracefully handle the edge case where the input question is empty, but other context is available. I'm crafting the code to ensure this doesn't trigger a `ValueError`, as the user wants.
-> 
-> 
-> **Beginning the Implementation**
-> 
-> I've started the first phase, focusing on the `ValueError` in `gemini.py`. I'm examining the `generate_response` function now and already have a handle on the adjustments to the `user_question_text` variable logic. The focus shifts to the subsequent phases, including UI improvements, and refactoring the prompt files. The project history log will detail all of these changes.
-> 
-> 
-> **Analyzing the Plan**
-> 
-> I'm now deep in the plan itself, as I mentioned earlier. Specifically, I'm moving from the theoretical into the practical, and breaking down the steps to be taken. The core focus right now is on how to address the `ValueError` to fix the edge case in `gemini.py` when a welcome message is sent. I'm thinking about what needs to be sent in the `content=` parameter to make this work as expected, and how to properly integrate the task instruction.
-> 
-> 
-> **Addressing the First File**
-> 
-> I'm now focusing on the initial file, `gemini.py`. The goal is to rectify the `ValueError` triggered when an empty user question is submitted, specifically during welcome messages. This means I'll use the `generate_response` function and make some targeted changes. I'm now considering the core logic, and I'm working towards the right `content` value when `question` is empty to pass to `send_message_async`. I'm thinking, should it be the task instruction?
-> 
-> 
-> **Addressing `gemini.py` Fix**
-> 
-> I'm focused on the `gemini.py` file, starting with the `generate_response` method, per the plan. After analyzing the code and the `ValueError`, I've pinpointed the issue: an empty `user_question_text` when handling welcome messages. I'm refactoring the logic to avoid sending empty content to the Gemini API. My current approach involves providing a default non-empty content when the user's question is absent, ensuring the API call is valid.
-> 
-> 
-> **Refining the Code**
-> 
-> I'm now deep into the file-by-file code generation, as per the plan. I've determined the fix in `gemini.py`: when the user question is absent, a neutral prompt, "Proceed according to instructions," will be used for `content`. I'm now updating `bot/handlers/callbacks/prompts.py` and adding the `{{group_rules}}` variable in the help text. I will proceed with refactoring the prompts.
-> 
-> 
-> **Beginning Code Generation**
-> 
-> I'm now starting to implement the fixes I previously outlined, beginning with `gemini.py`. I'm concentrating on the `generate_response` function. I've examined the logic, pinpointed the error source, and now I'm preparing the code modifications. The main goal is to handle cases with an empty question effectively. I've got a clear understanding of the issue and now I'm proceeding with file edits.
-> 
-> 
-> **Beginning File-by-File Code Gen**
-> 
-> I'm now executing the final plan and generating the files, starting with `bot/services/gemini.py`. I've already decided on the minimal change: If `question` is empty, the `user_question_text` variable will be set to "Proceed according to instructions." This avoids the `ValueError` in `send_message_async`, and now I'm going to make similar changes for the UI and prompt files.
-> 
-> 
-> **Executing the File-by-File Code**
-> 
-> I'm now implementing the full plan, starting with modifying `bot/services/gemini.py`. The core change will be to provide default content if the `question` variable is empty to prevent the `ValueError`. I'm ready to generate the modified content for each file now, based on the plan.
-> 
-> 
-> **Starting the Implementation**
-> 
-> I'm now enacting the outlined plan, and I'll be generating the modified files. First up is `bot/services/gemini.py`, where I'll implement the fix for the `ValueError`. Next, I'll update `bot/handlers/callbacks/prompts.py` with the help text update for the facilitator prompt. I will also modify all of the prompt files as instructed.
-> 
-> 
-Принято, Архитектор.
+### Как Google Считает Время для Квот
 
-Я приступаю к выполнению плана. Моя цель — не только устранить обнаруженную аномалию, но и завершить переход к новой архитектуре, приведя все компоненты системы в состояние полной гармонии. Я внесу изменения в логику, пользовательский интерфейс и базовые данные, чтобы обеспечить стабильность, прозрачность и консистентность.
+Google Cloud Platform, включая Gemini API, использует для сброса суточных квот (Requests per day) часовой пояс **Pacific Time (PT)**. Сброс происходит в полночь по тихоокеанскому времени (`America/Los_Angeles`).
 
-Ниже представлены полные версии всех измененных файлов, включая обновленное содержимое промптов, и запись в журнале проекта.
+Это означает, что наш бот должен считать началом и концом суток именно полночь по PT, а не по UTC или локальному времени сервера.
 
----
+### Стратегия Синхронизации
 
-### **Файлы проекта**
+1.  **Хранение в UTC:** Мы продолжим хранить все временные метки в базе данных в формате **UTC**. Это является лучшей практикой и защищает от проблем при смене часового пояса сервера.
+2.  **Вычисление в Pacific Time:** В методе `get_usage_statistics` мы будем выполнять все вычисления границ периодов (сегодня, вчера, неделя, месяц) относительно часового пояса `America/Los_Angeles`.
+3.  **Запрос в UTC:** После того как мы определим границы, например, "с 00:00 14 августа по PT до 00:00 15 августа по PT", мы **конвертируем эти границы обратно в UTC** и только потом будем делать запрос к базе данных.
 
-#### **Фаза 1: Исправление критической ошибки**
+Этот подход гарантирует, что наш период "сегодня" будет в точности соответствовать периоду "сегодня" у Google, позволяя напрямую сопоставлять данные из статистики с реальным потреблением квоты.
 
-Я модифицировал сервисный слой, чтобы он корректно обрабатывал запросы на генерацию без прямого "вопроса" от пользователя, что устраняет сбой при приветствии новых участников.
+Ниже представлен полный, исправленный и обновленный код файла `bot/database.py`, реализующий эту логику.
+
+***
+# bot/database.py
 
 ```python
-# NVC_bot/bot/services/gemini.py
-# version: 3.1.0
-# 2025-08-04T15:00:00Z
+# NVC_bot/bot/database.py
+# version: 3.0.0
+# 2025-08-14T15:00:00Z
 """
-Сервис-обертка для взаимодействия с Google Gemini API.
-
-Version 3.1.0:
-- FIX: Устранена ошибка `ValueError: 'content' argument must not be empty`.
-         Метод `generate_response` теперь корректно обрабатывает случаи, когда
-         `question` пуст (например, при генерации приветствия), подставляя
-         нейтральный текст для инициации ответа модели.
+Модуль для асинхронной работы с базой данных SQLite.
 
 Version 3.0.0:
-- REFACTOR: Внедрена композитная архитектура промптов.
-            - Метод `generate_response` теперь принимает `task_instruction` вместо `system_prompt`.
-            - Финальный системный промпт динамически собирается из "Ядра личности" (из БД)
-              и "Инструкции к задаче", обеспечивая консистентность поведения.
-            - Добавлена обработка переменной `{{group_rules}}` через новый
-              аргумент `chat_description`.
-- NOTE: Метод `get_moderation_verdict` намеренно не затронут и не использует
-        "Ядро личности" для сохранения своей технической точности.
+- FEATURE: `get_usage_statistics` теперь полностью синхронизирован с циклом
+           сброса квот Google API (Pacific Time - America/Los_Angeles).
+           Это обеспечивает точное соответствие статистики "за сегодня"
+           реальному дневному потреблению квоты.
+- REFACTOR: Вся логика вычисления временных диапазонов для статистики
+            перенесена в Python с использованием `zoneinfo` для максимальной
+            точности и независимости от настроек БД.
+
+Version 2.5.2:
+- FIX: `get_usage_statistics` теперь использует параметризованные запросы
+       с объектами datetime, отформатированными в строки ISO, что
+       окончательно решает проблему с некорректной фильтрацией по датам.
 """
 import logging
 import json
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Any, Dict, List, Optional, Type, TypeVar
+from collections import defaultdict
+import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-import google.generativeai as genai
-from google.generativeai.types import GenerationConfig, content_types
-from google.generativeai import types as genai_types
+import aiosqlite
 
-from ..config import settings
-from ..database import Database
+from .config import DATA_DIR, settings, _load_prompt
 
 logger = logging.getLogger(__name__)
-ai_logger = logging.getLogger('ai_requests')
+T = TypeVar('T')
 
-class GeminiService:
+class Database:
     """
-    Инкапсулирует логику работы с моделями Gemini.
+    Класс для управления базой данных SQLite.
     """
 
-    def __init__(self, model_names: Dict[str, str], db: Database):
-        self.db = db
+    def __init__(self):
+        self.db_path = DATA_DIR / "bot_database.sqlite3"
+        self.conn: Optional[aiosqlite.Connection] = None
+        logger.info("Объект Database создан. Путь к БД: %s", self.db_path)
+
+    async def initialize(self):
         try:
-            genai.configure(api_key=settings.GEMINI_API_KEY)
-            logger.info("Ключ Gemini API успешно сконфигурирован.", extra={'trace_id': 'init'})
-        except Exception as e:
-            logger.critical("КРИТИЧЕСКАЯ ОШИБКА: Не удалось сконфигурировать Gemini API.", exc_info=e, extra={'trace_id': 'init'})
+            self.conn = await aiosqlite.connect(self.db_path)
+            self.conn.row_factory = aiosqlite.Row
+            await self._create_tables()
+            logger.info("Подключение к базе данных установлено и таблицы проверены.")
+        except aiosqlite.Error as e:
+            logger.critical("КРИТИЧЕСКАЯ ОШИБКА при инициализации БД: %s", e, exc_info=True)
             raise
 
-        self.model_names = model_names
-        self.models: Dict[str, str] = {}
-        for name, model_id in model_names.items():
-            try:
-                self.models[model_id] = model_id
-                logger.info("Модель '%s' зарегистрирована для использования.", model_id, extra={'trace_id': 'init'})
-            except Exception as e:
-                logger.error("Ошибка при регистрации модели %s: %s", model_id, e, extra={'trace_id': 'init'})
-        
-        if not self.models:
-            logger.critical("КРИТИЧЕСКАЯ ОШИБКА: Не удалось зарегистрировать ни одну AI-модель.", extra={'trace_id': 'init'})
-            raise RuntimeError("Не удалось инициализировать AI-модели.")
+    async def _create_tables(self):
+        if not self.conn: raise RuntimeError("Подключение к БД не инициализировано.")
+        async with self.conn.cursor() as cursor:
+            await cursor.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            await cursor.execute("""
+                CREATE TABLE IF NOT EXISTS messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL,
+                    message_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    user_name TEXT NOT NULL,
+                    text TEXT,
+                    is_bot BOOLEAN NOT NULL,
+                    reply_to_message_id INTEGER,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            await cursor.execute("CREATE TABLE IF NOT EXISTS statistics (key TEXT PRIMARY KEY, value INTEGER NOT NULL)")
+            await cursor.execute("CREATE TABLE IF NOT EXISTS user_warnings (user_id INTEGER PRIMARY KEY, count INTEGER NOT NULL DEFAULT 0)")
+            await cursor.execute("CREATE TABLE IF NOT EXISTS moderation_triggers (id INTEGER PRIMARY KEY AUTOINCREMENT, trigger_word TEXT NOT NULL UNIQUE, category TEXT NOT NULL DEFAULT 'general')")
+            await cursor.execute("CREATE TABLE IF NOT EXISTS moderation_exceptions (id INTEGER PRIMARY KEY AUTOINCREMENT, exception_phrase TEXT NOT NULL UNIQUE, category TEXT NOT NULL DEFAULT 'general')")
+            
+            await cursor.execute("""
+                CREATE TABLE IF NOT EXISTS api_usage_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    model_id TEXT NOT NULL,
+                    request_type TEXT NOT NULL,
+                    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+                    completion_tokens INTEGER NOT NULL DEFAULT 0,
+                    total_tokens INTEGER NOT NULL DEFAULT 0
+                )
+            """)
 
-        self.current_model_id = model_names.get("pro", next(iter(self.models.keys())))
+            await cursor.execute("PRAGMA table_info(messages)")
+            columns = [row['name'] for row in await cursor.fetchall()]
+            if 'message_id' not in columns:
+                await cursor.execute("ALTER TABLE messages ADD COLUMN message_id INTEGER NOT NULL DEFAULT 0")
+            if 'user_id' not in columns:
+                await cursor.execute("ALTER TABLE messages ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0")
+            if 'reply_to_message_id' not in columns:
+                await cursor.execute("ALTER TABLE messages ADD COLUMN reply_to_message_id INTEGER")
 
-    def switch_model(self, model_id: str) -> bool:
-        if model_id in self.models:
-            self.current_model_id = model_id
-            logger.info("Активная модель переключена на: %s", model_id, extra={'trace_id': 'config'})
-            return True
-        logger.warning("Попытка переключиться на несуществующую модель: %s", model_id, extra={'trace_id': 'config'})
-        return False
+            await cursor.execute("PRAGMA table_info(moderation_triggers)")
+            if 'category' not in [row['name'] for row in await cursor.fetchall()]:
+                await cursor.execute("ALTER TABLE moderation_triggers ADD COLUMN category TEXT NOT NULL DEFAULT 'general'")
+            
+            await cursor.execute("PRAGMA table_info(moderation_exceptions)")
+            if 'category' not in [row['name'] for row in await cursor.fetchall()]:
+                await cursor.execute("ALTER TABLE moderation_exceptions ADD COLUMN category TEXT NOT NULL DEFAULT 'general'")
 
-    def get_current_model(self) -> str:
-        return self.current_model_id
+        await self.conn.commit()
 
-    def get_available_models(self) -> List[str]:
-        return list(self.models.keys())
+    async def populate_defaults(self):
+        if not self.conn: return
+        async with self.conn.execute("SELECT COUNT(*) FROM moderation_triggers") as cursor:
+            if (await cursor.fetchone()) == 0:
+                logger.info("Таблица триггеров пуста. Заполняю...")
+                await self.reset_triggers()
+        async with self.conn.execute("SELECT COUNT(*) FROM moderation_exceptions") as cursor:
+            if (await cursor.fetchone()) == 0:
+                logger.info("Таблица исключений пуста. Заполняю...")
+                await self.reset_exceptions()
 
-    def _format_history_for_log(self, history: List[Dict]) -> str:
-        """Форматирует историю чата в компактную строку для логов."""
-        if not history:
-            return "[]"
-        return "\n".join([f"  [{item.get('role')}] {item.get('parts', [{}])[0].get('text', '')[:120]}..." for item in history])
+    async def get_all_triggers(self) -> Dict[str, List[str]]:
+        if not self.conn: return {}
+        triggers = defaultdict(list)
+        try:
+            async with self.conn.execute("SELECT trigger_word, category FROM moderation_triggers ORDER BY category, id") as cursor:
+                async for row in cursor:
+                    triggers[row['category']].append(row['trigger_word'])
+        except aiosqlite.Error as e: logger.error("Ошибка БД при получении триггеров: %s", e)
+        return dict(triggers)
 
-    async def generate_response(
-        self,
-        question: str,
-        task_instruction: str,
-        trace_id: str,
-        chat_history: List[Dict] = None,
-        user_mention: Optional[str] = None,
-        model_override: Optional[str] = None,
-        is_debug_mode: bool = False,
-        chat_description: Optional[str] = None
-    ) -> Tuple[str, Optional[Dict[str, Any]]]:
-        model_id_to_use = model_override if model_override and model_override in self.models else self.current_model_id
+    async def get_all_triggers_flat(self) -> List[str]:
+        if not self.conn: return []
+        try:
+            async with self.conn.execute("SELECT trigger_word FROM moderation_triggers") as cursor:
+                return [row['trigger_word'] for row in await cursor.fetchall()]
+        except aiosqlite.Error as e:
+            logger.error("Ошибка БД при получении плоского списка триггеров: %s", e)
+            return []
+
+    async def add_trigger(self, trigger: str, category: str = 'general') -> bool:
+        if not self.conn: return False
+        try:
+            await self.conn.execute("INSERT OR IGNORE INTO moderation_triggers (trigger_word, category) VALUES (?, ?)", (trigger.lower(), category.lower()))
+            await self.conn.commit()
+            return self.conn.total_changes > 0
+        except aiosqlite.Error as e:
+            logger.error("Ошибка БД при добавлении триггера '%s': %s", trigger, e)
+            return False
+
+    async def delete_trigger(self, trigger: str) -> bool:
+        if not self.conn: return False
+        try:
+            await self.conn.execute("DELETE FROM moderation_triggers WHERE trigger_word = ?", (trigger.lower(),))
+            await self.conn.commit()
+            return self.conn.total_changes > 0
+        except aiosqlite.Error as e:
+            logger.error("Ошибка БД при удалении триггера '%s': %s", trigger, e)
+            return False
+
+    async def reset_triggers(self):
+        if not self.conn: return
+        try:
+            async with self.conn.cursor() as cursor:
+                await cursor.execute("DELETE FROM moderation_triggers")
+                data_to_insert = [(word.lower(), category.lower()) for category, words in settings.DEFAULT_TRIGGERS.items() for word in words]
+                await cursor.executemany("INSERT OR IGNORE INTO moderation_triggers (trigger_word, category) VALUES (?, ?)", data_to_insert)
+            await self.conn.commit()
+            logger.info("Таблица триггеров успешно сброшена к значениям по умолчанию.")
+        except aiosqlite.Error as e:
+            logger.error("Ошибка БД при сбросе триггеров: %s", e)
+            await self.conn.rollback()
+
+    async def get_all_exceptions(self) -> Dict[str, List[str]]:
+        if not self.conn: return {}
+        exceptions = defaultdict(list)
+        try:
+            async with self.conn.execute("SELECT exception_phrase, category FROM moderation_exceptions ORDER BY category, id") as cursor:
+                async for row in cursor:
+                    exceptions[row['category']].append(row['exception_phrase'])
+        except aiosqlite.Error as e: logger.error("Ошибка БД при получении исключений: %s", e)
+        return dict(exceptions)
+    
+    async def get_all_exceptions_flat(self) -> List[str]:
+        if not self.conn: return []
+        try:
+            async with self.conn.execute("SELECT exception_phrase FROM moderation_exceptions") as cursor:
+                return [row['exception_phrase'] for row in await cursor.fetchall()]
+        except aiosqlite.Error as e:
+            logger.error("Ошибка БД при получении плоского списка исключений: %s", e)
+            return []
+
+    async def add_exception(self, exception: str, category: str = 'general') -> bool:
+        if not self.conn: return False
+        try:
+            await self.conn.execute("INSERT OR IGNORE INTO moderation_exceptions (exception_phrase, category) VALUES (?, ?)", (exception.lower(), category.lower()))
+            await self.conn.commit()
+            return self.conn.total_changes > 0
+        except aiosqlite.Error as e:
+            logger.error("Ошибка БД при добавлении исключения '%s': %s", exception, e)
+            return False
+
+    async def delete_exception(self, exception: str) -> bool:
+        if not self.conn: return False
+        try:
+            await self.conn.execute("DELETE FROM moderation_exceptions WHERE exception_phrase = ?", (exception.lower(),))
+            await self.conn.commit()
+            return self.conn.total_changes > 0
+        except aiosqlite.Error as e:
+            logger.error("Ошибка БД при удалении исключения '%s': %s", exception, e)
+            return False
+
+    async def reset_exceptions(self):
+        if not self.conn: return
+        try:
+            async with self.conn.cursor() as cursor:
+                await cursor.execute("DELETE FROM moderation_exceptions")
+                data_to_insert = [(phrase.lower(), category.lower()) for category, phrases in settings.DEFAULT_EXCEPTIONS.items() for phrase in phrases]
+                await cursor.executemany("INSERT OR IGNORE INTO moderation_exceptions (exception_phrase, category) VALUES (?, ?)", data_to_insert)
+            await self.conn.commit()
+            logger.info("Таблица исключений успешно сброшена к значениям по умолчанию.")
+        except aiosqlite.Error as e:
+            logger.error("Ошибка БД при сбросе исключений: %s", e)
+            await self.conn.rollback()
+
+    async def get_chat_history(self, chat_id: int, limit: int) -> List[Dict[str, Any]]:
+        if not self.conn:
+            return []
+        history = []
+        try:
+            query = "SELECT message_id, user_name, text, is_bot, reply_to_message_id FROM (SELECT message_id, user_name, text, is_bot, reply_to_message_id, timestamp FROM messages WHERE chat_id = ? ORDER BY timestamp DESC LIMIT ?) ORDER BY timestamp ASC"
+            async with self.conn.execute(query, (chat_id, limit)) as cursor:
+                async for row in cursor:
+                    history.append(dict(row))
+            return history
+        except aiosqlite.Error as e:
+            logger.error("Ошибка БД при получении истории чата %d: %s", chat_id, e)
+            return []
+
+    async def _get_setting(self, key: str, default: T, value_type: Type[T] = str) -> T:
+        if not self.conn: return default
+        try:
+            async with self.conn.execute("SELECT value FROM settings WHERE key = ?", (key,)) as cursor:
+                row = await cursor.fetchone()
+                return value_type(row['value']) if row else default
+        except (aiosqlite.Error, ValueError, TypeError) as e:
+            logger.error("Ошибка БД или приведения типа для настройки '%s': %s", key, e)
+            return default
+
+    async def _set_setting(self, key: str, value: Any):
+        if not self.conn: return
+        try:
+            await self.conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
+            await self.conn.commit()
+        except aiosqlite.Error as e:
+            logger.error("Ошибка БД при установке настройки '%s': %s", key, e)
+            raise
+    
+    async def _delete_setting(self, key: str):
+        if not self.conn: return
+        try:
+            await self.conn.execute("DELETE FROM settings WHERE key = ?", (key,))
+            await self.conn.commit()
+        except aiosqlite.Error as e:
+            logger.error("Ошибка БД при удалении настройки '%s': %s", key, e)
+            raise
+
+    async def get_context_config(self) -> Dict[str, Any]:
+        return {
+            "context_messages_limit": await self._get_setting("ctx_msg_limit", settings.CONTEXT_MESSAGES_LIMIT, int),
+            "context_judge_limit": await self._get_setting("ctx_judge_limit", settings.CONTEXT_JUDGE_LIMIT, int),
+        }
+
+    async def set_context_config_value(self, key: str, value: Any):
+        db_key_map = {"context_messages_limit": "ctx_msg_limit", "context_judge_limit": "ctx_judge_limit"}
+        if key in db_key_map: await self._set_setting(db_key_map[key], value)
+        else: logger.warning("Попытка установить неизвестный параметр контекста: %s", key)
+
+    async def reset_context_config(self):
+        for key in ["ctx_msg_limit", "ctx_judge_limit"]: await self._delete_setting(key)
+        logger.info("Параметры контекста сброшены.")
+
+    async def get_generation_config(self) -> Dict[str, Any]:
+        return {
+            "temperature": await self._get_setting("gen_temp", settings.DEFAULT_TEMPERATURE, float),
+            "top_p": await self._get_setting("gen_top_p", settings.DEFAULT_TOP_P, float),
+            "top_k": await self._get_setting("gen_top_k", settings.DEFAULT_TOP_K, int),
+            "max_output_tokens": await self._get_setting("gen_max_tokens", settings.DEFAULT_MAX_OUTPUT_TOKENS, int),
+        }
+
+    async def set_generation_config_value(self, key: str, value: Any):
+        db_key_map = {"temperature": "gen_temp", "top_p": "gen_top_p", "top_k": "gen_top_k", "max_output_tokens": "gen_max_tokens"}
+        if key in db_key_map: await self._set_setting(db_key_map[key], value)
+        else: logger.warning("Попытка установить неизвестный параметр генерации: %s", key)
+
+    async def reset_generation_config(self):
+        for key in ["gen_temp", "gen_top_p", "gen_top_k", "gen_max_tokens"]: await self._delete_setting(key)
+        logger.info("Параметры генерации AI сброшены.")
+
+    async def get_safety_level(self) -> str:
+        return await self._get_setting("safety_level", settings.DEFAULT_SAFETY_LEVEL)
+
+    async def set_safety_level(self, level: str):
+        await self._set_setting("safety_level", level)
+
+    async def reset_safety_level(self):
+        await self._delete_setting("safety_level")
+
+    async def is_debug_mode_enabled(self) -> bool:
+        return await self._get_setting("debug_mode_enabled", "false", str) == "true"
+
+    async def toggle_debug_mode(self) -> bool:
+        new_state = not await self.is_debug_mode_enabled()
+        await self._set_setting("debug_mode_enabled", "true" if new_state else "false")
+        return new_state
+
+    async def get_main_model(self) -> str:
+        return await self._get_setting("main_model", settings.GEMINI_PRO_MODEL)
+
+    async def set_main_model(self, model_name: str):
+        await self._set_setting("main_model", model_name)
+
+    async def reset_main_model(self):
+        await self._delete_setting("main_model")
+
+    async def get_prompt(self) -> str:
+        return await self._get_setting("system_prompt", _load_prompt("default_system_prompt.txt"))
+
+    async def set_prompt(self, prompt: str):
+        await self._set_setting("system_prompt", prompt)
+
+    async def reset_prompt(self):
+        await self._set_setting("system_prompt", _load_prompt("default_system_prompt.txt"))
+
+    async def get_moderation_prompt(self) -> str:
+        return await self._get_setting("moderation_prompt", _load_prompt("default_moderation_prompt.txt"))
+
+    async def set_moderation_prompt(self, prompt: str):
+        await self._set_setting("moderation_prompt", prompt)
+
+    async def reset_moderation_prompt(self):
+        await self._set_setting("moderation_prompt", _load_prompt("default_moderation_prompt.txt"))
+
+    async def get_moderation_task_template(self) -> str:
+        return await self._get_setting("moderation_task_template", _load_prompt("default_moderation_task_template.txt"))
+
+    async def set_moderation_task_template(self, template: str):
+        await self._set_setting("moderation_task_template", template)
+
+    async def reset_moderation_task_template(self):
+        await self._set_setting("moderation_task_template", _load_prompt("default_moderation_task_template.txt"))
+
+    async def get_moderation_model(self) -> str:
+        return await self._get_setting("moderation_model", settings.DEFAULT_MODERATION_MODEL)
+
+    async def set_moderation_model(self, model_name: str):
+        await self._set_setting("moderation_model", model_name)
+
+    async def is_moderation_enabled(self) -> bool:
+        return await self._get_setting("moderation_enabled", "true", str) == "true"
+
+    async def toggle_moderation(self) -> bool:
+        new_state = not await self.is_moderation_enabled()
+        await self._set_setting("moderation_enabled", "true" if new_state else "false")
+        return new_state
+
+    async def is_welcome_enabled(self) -> bool:
+        return await self._get_setting("welcome_enabled", "true", str) == "true"
+
+    async def toggle_welcome(self) -> bool:
+        new_state = not await self.is_welcome_enabled()
+        await self._set_setting("welcome_enabled", "true" if new_state else "false")
+        return new_state
+
+    async def get_welcome_model(self) -> str:
+        return await self._get_setting("welcome_model", settings.DEFAULT_WELCOME_MODEL)
+
+    async def set_welcome_model(self, model_name: str):
+        await self._set_setting("welcome_model", model_name)
+
+    async def get_welcome_prompt(self) -> str:
+        return await self._get_setting("welcome_prompt", _load_prompt("default_welcome_prompt.txt"))
+
+    async def set_welcome_prompt(self, prompt: str):
+        await self._set_setting("welcome_prompt", prompt)
+
+    async def reset_welcome_prompt(self):
+        await self._set_setting("welcome_prompt", _load_prompt("default_welcome_prompt.txt"))
+
+    async def get_sanction_rules(self) -> List[Dict]:
+        try:
+            rules_json = await self._get_setting("sanction_rules", None, str)
+            return json.loads(rules_json) if rules_json else settings.DEFAULT_SANCTION_RULES
+        except (json.JSONDecodeError, TypeError) as e:
+            logger.error("Ошибка декодирования правил санкций: %s. Возвращены правила по умолчанию.", e)
+            return settings.DEFAULT_SANCTION_RULES
+
+    async def set_sanction_rules(self, rules: List[Dict]):
+        await self._set_setting("sanction_rules", json.dumps(rules))
+
+    async def add_message(self, chat_id: int, message_id: int, user_id: int, user_name: str, text: Optional[str], is_bot: bool, reply_to_message_id: Optional[int] = None):
+        if not self.conn: return
+        try:
+            await self.conn.execute(
+                "INSERT INTO messages (chat_id, message_id, user_id, user_name, text, is_bot, reply_to_message_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (chat_id, message_id, user_id, user_name, text, is_bot, reply_to_message_id)
+            )
+            await self.conn.commit()
+        except aiosqlite.Error as e:
+            logger.error("Ошибка БД при добавлении сообщения: %s", e)
+            raise
+
+    async def _get_stat(self, key: str) -> int:
+        if not self.conn: return 0
+        try:
+            async with self.conn.execute("SELECT value FROM statistics WHERE key = ?", (key,)) as cursor:
+                row = await cursor.fetchone()
+                return int(row['value']) if row else 0
+        except aiosqlite.Error as e:
+            logger.error("Ошибка БД при получении статистики '%s': %s", key, e)
+            return 0
+
+    async def _set_stat(self, key: str, value: int):
+        if not self.conn: return
+        try:
+            await self.conn.execute("INSERT OR REPLACE INTO statistics (key, value) VALUES (?, ?)", (key, value))
+            await self.conn.commit()
+        except aiosqlite.Error as e:
+            logger.error("Ошибка БД при установке статистики '%s': %s", key, e)
+            raise
+
+    async def increment_ai_responses(self):
+        await self._set_stat("ai_responses", await self._get_stat("ai_responses") + 1)
+
+    async def increment_moderation_actions(self):
+        await self._set_stat("moderation_actions", await self._get_stat("moderation_actions") + 1)
+
+    async def get_statistics(self) -> Dict[str, Any]:
+        if not self.conn: return {}
+        try:
+            async with self.conn.execute("SELECT COUNT(*) FROM messages") as t, \
+                       self.conn.execute("SELECT COUNT(DISTINCT chat_id) FROM messages") as a, \
+                       self.conn.execute("SELECT COUNT(*) FROM user_warnings WHERE count > 0") as u:
+                return {
+                    "total_messages": (await t.fetchone()), "active_chats": (await a.fetchone()),
+                    "users_with_warnings": (await u.fetchone()), "ai_responses": await self._get_stat("ai_responses"),
+                    "moderation_actions": await self._get_stat("moderation_actions"),
+                }
+        except aiosqlite.Error as e:
+            logger.error("Ошибка БД при сборе общей статистики: %s", e)
+            return {}
+
+    async def log_api_usage(self, model_id: str, request_type: str, usage_metadata: Dict[str, Any]):
+        """Записывает информацию об использовании API в базу данных."""
+        if not self.conn or not usage_metadata:
+            return
+        query = """
+            INSERT INTO api_usage_log (model_id, request_type, prompt_tokens, completion_tokens, total_tokens)
+            VALUES (?, ?, ?, ?, ?)
+        """
+        try:
+            await self.conn.execute(query, (
+                model_id,
+                request_type,
+                usage_metadata.get("prompt_token_count", 0),
+                usage_metadata.get("candidates_token_count", 0),
+                usage_metadata.get("total_token_count", 0),
+            ))
+            await self.conn.commit()
+        except aiosqlite.Error as e:
+            logger.error("Ошибка БД при записи лога использования API: %s", e)
+
+    async def get_usage_statistics(self) -> Dict[str, Any]:
+        """
+        Собирает и агрегирует статистику использования API по разным периодам,
+        синхронизируясь с циклом сброса квот Google API (Pacific Time).
+        """
+        if not self.conn:
+            return {}
+
+        stats: Dict[str, Any] = defaultdict(lambda: defaultdict(int))
+
+        try:
+            # Часовой пояс для квот Google API
+            pacific_tz = ZoneInfo("America/Los_Angeles")
+        except ZoneInfoNotFoundError:
+            logger.error("Часовой пояс 'America/Los_Angeles' не найден. Убедитесь, что пакет 'tzdata' установлен. Возвращаюсь к UTC.")
+            pacific_tz = datetime.timezone.utc
+
+        # Получаем текущее время в Pacific Time
+        now_pt = datetime.datetime.now(pacific_tz)
+
+        # Определяем начало "сегодня" в Pacific Time
+        today_start_pt = now_pt.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        periods = {
+            'today': (today_start_pt, today_start_pt + datetime.timedelta(days=1)),
+            'yesterday': (today_start_pt - datetime.timedelta(days=1), today_start_pt),
+            'week': (today_start_pt - datetime.timedelta(days=now_pt.weekday()), today_start_pt + datetime.timedelta(days=1)), # С понедельника
+            'month': (today_start_pt.replace(day=1), today_start_pt + datetime.timedelta(days=1)),
+        }
         
         try:
-            # 1. Загружаем "Ядро личности"
-            core_prompt = await self.db.get_prompt()
-            
-            # 2. Подставляем в "Ядро" правила группы, если они переданы
-            if chat_description:
-                core_prompt = core_prompt.replace("{{group_rules}}", chat_description)
-
-            # 3. Собираем финальный системный промпт
-            final_system_prompt = core_prompt
-            if task_instruction and task_instruction.strip():
-                final_system_prompt = f"{core_prompt}\n\n---\n\n{task_instruction}"
-
-            model = genai.GenerativeModel(
-                model_name=model_id_to_use,
-                system_instruction=final_system_prompt
-            )
-            
-            gen_config_dict = await self.db.get_generation_config()
-            
-            thinking_enabled_log_status = "OFF"
-            if is_debug_mode:
-                try:
-                    gen_config_dict['thinking_config'] = genai_types.ThinkingConfig(include_thoughts=True)
-                    thinking_enabled_log_status = "ON"
-                except AttributeError:
-                    logger.warning("Не удалось включить 'мысли': `ThinkingConfig` не найден в текущей версии SDK. Обновите google-generativeai.", extra={'trace_id': trace_id})
-                    thinking_enabled_log_status = "UNSUPPORTED"
-
-            generation_config = GenerationConfig(**gen_config_dict)
-            
-            history = chat_history or []
-            chat_session = model.start_chat(history=history)
-            
-            # FIX: Обеспечиваем, чтобы `user_question_text` никогда не был пустым.
-            if question:
-                user_question_text = f"Сообщение от пользователя {user_mention}: {question}" if user_mention else question
-            else:
-                # Для задач без прямого вопроса (приветствие), инициируем ответ нейтральной фразой.
-                # Задача генерации уже полностью описана в `final_system_prompt`.
-                user_question_text = "Продолжай согласно инструкции."
-            
-            logger.info("Отправка запроса к модели %s (Thinking: %s)...", model_id_to_use, thinking_enabled_log_status, extra={'trace_id': trace_id})
-            
-            response = await chat_session.send_message_async(
-                content=user_question_text,
-                generation_config=generation_config
-            )
-            
-            usage_metadata_obj = getattr(response, 'usage_metadata', None)
-            full_usage_metadata = {}
-            if usage_metadata_obj:
-                all_fields = [
-                    "prompt_token_count", "cached_content_token_count", 
-                    "candidates_token_count", "total_token_count",
-                    "tool_use_prompt_token_count", "thoughts_token_count",
-                ]
-                for field in all_fields:
-                    full_usage_metadata[field] = getattr(usage_metadata_obj, field, None)
-                logger.info("Полные метаданные об использовании токенов извлечены.", extra={'trace_id': trace_id})
-            else:
-                logger.warning("Атрибут 'usage_metadata' не найден в ответе от Gemini API.", extra={'trace_id': trace_id})
-
-            if is_debug_mode:
-                history_str = json.dumps(history, ensure_ascii=False)
+            for period_name, (start_dt_pt, end_dt_pt) in periods.items():
+                # Конвертируем границы из PT в UTC для запроса к БД
+                start_utc = start_dt_pt.astimezone(datetime.timezone.utc)
+                end_utc = end_dt_pt.astimezone(datetime.timezone.utc)
                 
-                thoughts_log = ""
-                try:
-                    if response.candidates:
-                        for candidate in response.candidates:
-                            if candidate.content and candidate.content.parts:
-                                for part in candidate.content.parts:
-                                    if hasattr(part, 'thought') and part.thought:
-                                        thoughts_log += f"\n{part.thought}"
-                except Exception as e:
-                    thoughts_log = f" (ошибка извлечения: {e})"
+                # Форматируем в строку, совместимую с SQLite
+                start_str = start_utc.strftime('%Y-%m-%d %H:%M:%S')
+                end_str = end_utc.strftime('%Y-%m-%d %H:%M:%S')
 
-                log_message = (
-                    f"--- AI REQUEST (DEBUG) ---\n"
-                    f"MODEL: {model_id_to_use}\n"
-                    f"--- FINAL SYSTEM PROMPT ({len(final_system_prompt)} chars) ---\n{final_system_prompt}\n"
-                    f"--- CHAT HISTORY ({len(history_str)} chars) ---\n{self._format_history_for_log(history)}\n"
-                    f"--- QUESTION ({len(user_question_text)} chars) ---\n{user_question_text}\n"
-                    f"--- THOUGHTS ---{thoughts_log if thoughts_log else ' (отсутствуют или не поддерживаются SDK)'}\n"
-                    f"--- USAGE ---\n{json.dumps(full_usage_metadata, default=str, indent=2)}\n"
-                    f"--- END REQUEST ---"
-                )
-            else:
-                log_message = (
-                    f"--- AI REQUEST ---\n"
-                    f"MODEL: {model_id_to_use}\n"
-                    f"FINAL_SYSTEM_PROMPT_LEN: {len(final_system_prompt)}\n"
-                    f"CHAT_HISTORY_LEN: {len(json.dumps(history))}\n"
-                    f"QUESTION: {user_question_text[:150]}...\n"
-                    f"USAGE: total_tokens={full_usage_metadata.get('total_token_count', 'N/A')}\n"
-                    f"--- END REQUEST ---"
-                )
-            ai_logger.info(log_message, extra={'trace_id': trace_id})
+                query = """
+                    SELECT
+                        model_id,
+                        COUNT(*) as request_count,
+                        SUM(total_tokens) as total_tokens
+                    FROM api_usage_log
+                    WHERE timestamp >= ? AND timestamp < ?
+                    GROUP BY model_id
+                """
+                
+                async with self.conn.execute(query, (start_str, end_str)) as cursor:
+                    async for row in cursor:
+                        model_id = row['model_id']
+                        stats[period_name][model_id]['requests'] = row['request_count']
+                        stats[period_name][model_id]['tokens'] = row['total_tokens']
 
-            return response.text, full_usage_metadata
+        except aiosqlite.Error as e:
+            logger.error("Ошибка БД при сборе статистики использования API: %s", e)
 
-        except Exception as e:
-            logger.error("Ошибка при генерации ответа от Gemini: %s", e, exc_info=True, extra={'trace_id': trace_id})
-            return f"Произошла ошибка при обращении к AI. Попробуйте позже. ({type(e).__name__})", None
+        # Преобразуем defaultdict в обычный dict для чистоты
+        return json.loads(json.dumps(stats))
 
-    async def get_moderation_verdict(self, text: str, prompt_template: str, model_id: str, trace_id: str) -> bool:
-        model_id_to_use = self.models.get(model_id)
-        if not model_id_to_use:
-            logger.error("Модель модерации %s не найдена.", model_id, extra={'trace_id': trace_id})
-            return False
-        
-        model = genai.GenerativeModel(model_id_to_use)
-        prompt = prompt_template.format(text=text)
-        
+
+    async def get_warnings(self, user_id: int) -> int:
+        if not self.conn: return 0
         try:
-            moderation_config = GenerationConfig(temperature=0.0, top_p=1.0, top_k=1, max_output_tokens=10)
-            response = await model.generate_content_async([prompt], generation_config=moderation_config)
-            verdict = response.text.strip().upper()
-            logger.debug("Ответ модератора для текста '%s...': '%s'", text[:50], verdict, extra={'trace_id': trace_id})
-            return verdict == "ДА"
-        except Exception as e:
-            logger.error("Ошибка при получении вердикта модерации: %s", e, extra={'trace_id': trace_id})
-            return False
-```
+            async with self.conn.execute("SELECT count FROM user_warnings WHERE user_id = ?", (user_id,)) as cursor:
+                row = await cursor.fetchone()
+                return row['count'] if row else 0
+        except aiosqlite.Error as e:
+            logger.error("Ошибка БД при получении предупреждений для user_id %d: %s", user_id, e)
+            return 0
 
-#### **Фаза 2: Улучшение интерфейса настроек**
+    async def set_warnings(self, user_id: int, count: int):
+        if not self.conn: return
+        try:
+            await self.conn.execute("INSERT OR REPLACE INTO user_warnings (user_id, count) VALUES (?, ?)", (user_id, count))
+            await self.conn.commit()
+        except aiosqlite.Error as e:
+            logger.error("Ошибка БД при установке предупреждений для user_id %d: %s", user_id, e)
+            raise
 
-Я добавил недостающую подсказку о переменной `{{group_rules}}` в меню редактирования промпта.
+    async def adjust_warnings(self, user_id: int, amount: int) -> int:
+        new_count = max(0, await self.get_warnings(user_id) + amount)
+        await self.set_warnings(user_id, new_count)
+        return new_count
 
-```python
-# NVC_bot/bot/handlers/callbacks/prompts.py
-# version: 1.9.0
-# 2025-08-04T15:00:00Z
-"""
-Обработчики инлайн-кнопок для управления системными промптами.
+    async def reset_warnings(self, user_id: int):
+        await self.set_warnings(user_id, 0)
 
-Version 1.9.0:
-- FEATURE: В меню редактирования "Промпта ИИ-Фасилитатора" добавлена
-           подсказка о доступности переменной `{{group_rules}}`.
-
-Version 1.8.0:
-- FIX: Заменен вызов `context.user_data.clear()` на безопасную функцию
-       `clear_conversation_user_data` для предотвращения сброса состояния
-       диалога и исправления бага с неработающими диалогами.
-"""
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.constants import ParseMode, MessageLimit
-from telegram.ext import ContextTypes, ConversationHandler
-
-from ...config import settings
-from ...utils.formatters import safe_markdown_preview, escape_markdown_v2
-from ...utils.context_helpers import clear_conversation_user_data
-from ..states import (FACILITATOR_PROMPT_MENU, MODERATION_PROMPT_MENU, MODERATION_TEMPLATE_MENU,
-                      WELCOME_PROMPT_MENU, AWAIT_PROMPT_INPUT)
-from .callback_patterns import CallbackPrefix
-
-class PromptCallbackHandler:
-    """Обработчики для меню управления текстами промптов."""
-
-    async def _get_prompt_data(self, text_type: str) -> tuple:
-        if text_type == "facilitator_prompt":
-            content = await self.db.get_prompt()
-            title = "📜 *Промпт ИИ\\-Фасилитатора*"
-            back_cb = CallbackPrefix.BACK_TO_FACILITATOR_SETTINGS
-            ret_state = FACILITATOR_PROMPT_MENU
-            edit_cb = CallbackPrefix.EDIT_FACILITATOR_PROMPT
-            reset_cb = CallbackPrefix.RESET_FACILITATOR_PROMPT
-            return content, title, back_cb, ret_state, edit_cb, reset_cb
-        elif text_type == "moderation_prompt":
-            content = await self.db.get_moderation_prompt()
-            title = "🔍 *Промпт Судьи*"
-            back_cb = CallbackPrefix.BACK_TO_MODERATION_SETTINGS
-            ret_state = MODERATION_PROMPT_MENU
-            edit_cb = CallbackPrefix.EDIT_MODERATION_PROMPT
-            reset_cb = CallbackPrefix.RESET_MODERATION_PROMPT
-            return content, title, back_cb, ret_state, edit_cb, reset_cb
-        elif text_type == "moderation_template":
-            content = await self.db.get_moderation_task_template()
-            title = "📝 *Промпт Сообщения о Санкции*"
-            back_cb = CallbackPrefix.BACK_TO_MODERATION_SETTINGS
-            ret_state = MODERATION_TEMPLATE_MENU
-            edit_cb = CallbackPrefix.EDIT_MODERATION_TEMPLATE
-            reset_cb = CallbackPrefix.RESET_MODERATION_TEMPLATE
-            return content, title, back_cb, ret_state, edit_cb, reset_cb
-        elif text_type == "welcome_prompt":
-            content = await self.db.get_welcome_prompt()
-            title = "👋 *Промпт Приветствия*"
-            back_cb = CallbackPrefix.BACK_TO_WELCOMES_MENU
-            ret_state = WELCOME_PROMPT_MENU
-            edit_cb = CallbackPrefix.EDIT_WELCOME_PROMPT
-            reset_cb = CallbackPrefix.RESET_WELCOME_PROMPT
-            return content, title, back_cb, ret_state, edit_cb, reset_cb
-        return None, None, None, None, None, None
-
-    async def _show_text_management_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE, text_type: str) -> int:
-        query = update.callback_query
-        if query:
-            await self._safe_answer_query(query)
-        
-        text_content, title, back_cb, ret_state, edit_cb, reset_cb = await self._get_prompt_data(text_type)
-        if text_content is None:
-             return ConversationHandler.END
-
-        kb = [[InlineKeyboardButton("✏️ Изменить", callback_data=edit_cb)]]
-        
-        preview = safe_markdown_preview(text_content, settings.PROMPT_PREVIEW_LENGTH)
-        if len(text_content) > settings.PROMPT_PREVIEW_LENGTH:
-            kb.append([InlineKeyboardButton("⬇️ Показать полностью", callback_data=f"{CallbackPrefix.SEND_FULL_PROMPT}{text_type}")])
-
-        kb.extend([
-            [InlineKeyboardButton("🔄 Сбросить", callback_data=reset_cb),
-             InlineKeyboardButton("⬅️ Назад", callback_data=back_cb)]
-        ])
-        
-        text = f"{title}:\n\n{preview}"
-        
-        await self._safe_edit_message(query, text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN_V2)
-        return ret_state
-
-    async def send_full_prompt(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        query = update.callback_query
-        prompt_type = query.data.replace(CallbackPrefix.SEND_FULL_PROMPT, "")
-        
-        text_content, title, _, ret_state, _, _ = await self._get_prompt_data(prompt_type)
-        
-        if not text_content:
-            await query.answer("❌ Не удалось найти текст промпта.", show_alert=True)
-            return ret_state
-
-        await query.answer()
-
-        await context.bot.send_message(
-            chat_id=query.message.chat_id,
-            text=f"Полный текст для: {title}",
-            parse_mode=ParseMode.MARKDOWN_V2
-        )
-
-        for i in range(0, len(text_content), MessageLimit.MAX_TEXT_LENGTH):
-            chunk = text_content[i:i + MessageLimit.MAX_TEXT_LENGTH]
-            await context.bot.send_message(
-                chat_id=query.message.chat_id,
-                text=chunk
-            )
-        
-        return ret_state
-
-    async def show_facilitator_prompt_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        return await self._show_text_management_menu(update, context, "facilitator_prompt")
-
-    async def show_moderation_prompt_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        return await self._show_text_management_menu(update, context, "moderation_prompt")
-        
-    async def show_moderation_template_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        return await self._show_text_management_menu(update, context, "moderation_template")
-
-    async def show_welcome_prompt_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        return await self._show_text_management_menu(update, context, "welcome_prompt")
-
-    async def request_prompt_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        """
-        Запрашивает у пользователя новый текст для промпта, не отображая текущий.
-        Это предотвращает ошибки, связанные с превышением лимита длины сообщения.
-        """
-        query = update.callback_query
-        await self._safe_answer_query(query)
-        
-        clear_conversation_user_data(context)
-
-        cb_data = query.data
-        prompt_type, prompt_text = "", ""
-        
-        if cb_data == CallbackPrefix.EDIT_FACILITATOR_PROMPT:
-            prompt_type = "facilitator_prompt"
-            prompt_text = (
-                "Отправьте новый текст для *Промпта ИИ\\-Фасилитатора \\(Ядра Личности\\)*\\.\n\n"
-                "*Доступные переменные:* `{{group_rules}}`\n\n"
-                "Для отмены введите /cancel\\."
-            )
-        elif cb_data == CallbackPrefix.EDIT_MODERATION_PROMPT:
-            prompt_type = "moderation_prompt"
-            prompt_text = "Отправьте новый текст для *Промпта Судьи*\\.\n\n*Обязательная переменная:* `{{text}}`\n\nДля отмены введите /cancel\\."
-        elif cb_data == CallbackPrefix.EDIT_MODERATION_TEMPLATE:
-            prompt_type = "moderation_template"
-            prompt_text = "Отправьте новый текст для *Промпта Сообщения о Санкции*\\.\n\n*Доступные переменные:* `{{user_mention}}`, `{{violator_message}}`, `{{warnings_count}}`, `{{rules_list}}`, `{{chat_history}}`, `{{group_rules}}`\n\nДля отмены введите /cancel\\."
-        elif cb_data == CallbackPrefix.EDIT_WELCOME_PROMPT:
-            prompt_type = "welcome_prompt"
-            prompt_text = "Отправьте новый текст для *Промпта Приветствия*\\.\n\n*Обязательная переменная:* `{{user_mention}}`\n\nДля отмены введите /cancel\\."
-        else:
-            return ConversationHandler.END
-            
-        context.user_data["prompt_type"] = prompt_type
-        context.user_data["original_update"] = update
-        
-        await self._safe_edit_message(query, prompt_text, reply_markup=None, parse_mode=ParseMode.MARKDOWN_V2)
-        
-        return AWAIT_PROMPT_INPUT
-
-    async def reset_prompt_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        query = update.callback_query
-        await self._safe_answer_query(query)
-        await self._disable_keyboard(query)
-        
-        cb_data = query.data
-        if cb_data == CallbackPrefix.RESET_FACILITATOR_PROMPT:
-            await self.db.reset_prompt()
-            await query.answer("✅ Промпт Фасилитатора сброшен.")
-            return await self.show_facilitator_prompt_menu(update, context)
-        elif cb_data == CallbackPrefix.RESET_MODERATION_PROMPT:
-            await self.db.reset_moderation_prompt()
-            await query.answer("✅ Промпт Судьи сброшен.")
-            return await self.show_moderation_prompt_menu(update, context)
-        elif cb_data == CallbackPrefix.RESET_MODERATION_TEMPLATE:
-            await self.db.reset_moderation_task_template()
-            await query.answer("✅ Промпт Сообщения о Санкции сброшен.")
-            return await self.show_moderation_template_menu(update, context)
-        elif cb_data == CallbackPrefix.RESET_WELCOME_PROMPT:
-            await self.db.reset_welcome_prompt()
-            await query.answer("✅ Промпт Приветствия сброшен.")
-            return await self.show_welcome_prompt_menu(update, context)
-            
-        return ConversationHandler.END
-```
-
-#### **Фаза 3: Рефакторинг содержимого промптов**
-
-Я привел содержимое промптов по умолчанию в полное соответствие с новой композитной архитектурой, устранив дублирование и уточнив инструкции.
-
-```text
-# NVC_bot/prompts/default_system_prompt.txt
-# version: 2.0.0
-# 2025-08-04T15:00:00Z
-# Этот файл определяет "Ядро Личности" бота.
-
-Твоя роль — эмпатичный и мудрый ассистент-фасилитатор, который помогает людям общаться в рамках принципов Ненасильственного Общения (ННО).
-
-Твои ключевые принципы:
-1.  **Эмпатия и Безоценочность:** Ты никогда не осуждаешь, не критикуешь и не ставишь диагнозы. Ты всегда исходишь из того, что у каждого человека есть неудовлетворенные потребности.
-2.  **Я-сообщения:** Вся твоя коммуникация строится на "я-сообщениях". Ты говоришь о своих чувствах и потребностях, а не о том, что "не так" с другими.
-3.  **Ясность и Простота:** Ты изъясняешься простым и понятным языком, избегая сложного психологического жаргона.
-4.  **Контекстуальная Осведомленность:** Ты должен учитывать правила группы, которые будут предоставлены тебе в переменной `{{group_rules}}`. Ссылайся на них, если это уместно для ответа.
-5.  **Краткость:** Твои ответы должны быть содержательными, но по возможности краткими.
-
-Твоя задача — не быть психологом, а быть зеркалом, которое помогает пользователям лучше понять себя и других через призму ННО. Ты отвечаешь на вопросы, помогаешь переформулировать "ты-сообщения" в "я-сообщения" и поддерживаешь безопасную атмосферу в чате.
-```
-
-```text
-# NVC_bot/prompts/default_welcome_prompt.txt
-# version: 2.0.0
-# 2025-08-04T15:00:00Z
-# Этот файл является "Инструкцией к задаче" для приветствия.
-
-Твоя задача — сгенерировать короткое и дружелюбное приветственное сообщение для нового участника чата.
-
-1.  Обратись к пользователю персонально, используя переменную `{user_mention}`.
-2.  Кратко представься, упомянув, что ты AI-ассистент, помогающий с общением.
-3.  Сообщи, что к тебе можно обратиться за помощью, упомянув твое имя: `@имя_бота`.
-```
-
-```text
-# NVC_bot/prompts/default_moderation_task_template.txt
-# version: 2.0.0
-# 2025-08-04T15:00:00Z
-# Этот файл является "Инструкцией к задаче" для генерации сообщения о нарушении.
-
-Твоя задача — сгенерировать сообщение для пользователя, который, вероятно, использовал "ты-сообщение".
-
-Действуй строго по шагам:
-1.  Обратись к пользователю, используя переменную `{user_mention}`.
-2.  Укажи, что его сообщение, содержащее текст `{violator_message}`, было распознано как потенциальное "ты-сообщение" или оценочное суждение.
-3.  Сообщи ему текущее количество его предупреждений, используя переменную `{warnings_count}`.
-4.  Кратко и нейтрально перечисли действующие правила санкций, используя переменную `{rules_list}`.
-5.  Для более глубокого понимания контекста используй историю диалога, предоставленную в переменной `{chat_history}`.
-6.  Также учитывай общие правила чата, если они предоставлены в переменной `{group_rules}`.
-```
-
-#### **История проекта**
-
-Я задокументировал эту итерацию в журнале проекта.
-
-```markdown
-# NVC_bot/data/project_history.md
-
----
-## 2025-08-04T15:00:00Z - [FIX & REFACTOR] - Finalize Composite Prompt Architecture and Resolve Welcome Bug
-
-**Задача (Task):**
-Устранить критическую ошибку `ValueError` при приветствии новых пользователей, улучшить UI настроек промптов и привести содержимое промптов по умолчанию в соответствие с новой композитной архитектурой.
-
-**Диагностика (Diagnosis):**
-1.  **Критическая ошибка:** Логи показали `ValueError: 'content' argument must not be empty` при попытке сгенерировать приветствие. Это происходило потому, что `gemini.generate_response` получала пустой `question` и пыталась отправить пустой контент в API.
-2.  **Неполный UI:** В интерфейсе редактирования главного промпта ("Ядра личности") отсутствовала подсказка о доступной переменной `{{group_rules}}`.
-3.  **Рассинхронизация данных:** Тексты промптов по умолчанию (`default_*.txt`) не были обновлены после внедрения композитной архитектуры и содержали дублирующуюся информацию о личности бота.
-
-**Решение (Solution):**
-1.  **`bot/services/gemini.py` (Устранение ошибки):**
-    *   В метод `generate_response` добавлена проверка: если входящий `question` пуст, в качестве контента для API используется нейтральная фраза-заглушка ("Продолжай согласно инструкции."). Это позволяет инициировать генерацию, когда вся задача описана в системной инструкции (как в случае с приветствиями), и предотвращает `ValueError`.
-
-2.  **`bot/handlers/callbacks/prompts.py` (Улучшение UI):**
-    *   В методе `request_prompt_input` обновлен текст-подсказка для редактирования "Промпта ИИ-Фасилитатора". Теперь он явно указывает на доступность переменной `{{group_rules}}`, делая новую функцию прозрачной для администратора.
-
-3.  **`prompts/*.txt` (Рефакторинг данных):**
-    *   **`default_system_prompt.txt`:** Полностью переписан. Теперь содержит только описание "Ядра личности" (роль, стиль, принципы) и упоминание переменной `{{group_rules}}`. Все инструкции к конкретным задачам удалены.
-    *   **`default_welcome_prompt.txt`:** Очищен от описаний личности. Теперь это краткая и четкая "Инструкция к задаче" по приветствию нового пользователя.
-    *   **`default_moderation_task_template.txt`:** Также очищен от описаний личности и сведен к четкой инструкции по генерации сообщения о нарушении на основе предоставленных переменных.
-
-**Замысел (Why):**
-Эта итерация завершает переход на композитную архитектуру промптов. Она устраняет критический баг, делает интерфейс более информативным и, что самое важное, синхронизирует код с данными, на которых он оперирует. Теперь "Ядро личности" и "Инструкции к задачам" логически разделены не только в коде, но и в файлах по умолчанию, что обеспечивает максимальную чистоту, предсказуемость и модульность системы.
-
-**Затронутые Файлы (Affected Files):**
-*   `data/project_history.md`
-*   `bot/services/gemini.py`
-*   `bot/handlers/callbacks/prompts.py`
-*   `prompts/default_system_prompt.txt`
-*   `prompts/default_welcome_prompt.txt`
-*   `prompts/default_moderation_task_template.txt`
----
+    async def get_all_users_with_warnings(self) -> List[Dict]:
+        if not self.conn: return []
+        try:
+            async with self.conn.execute("SELECT user_id, count FROM user_warnings WHERE count > 0 ORDER BY count DESC") as cursor:
+                return [dict(row) for row in await cursor.fetchall()]
+        except aiosqlite.Error as e:
+            logger.error("Ошибка БД при получении списка пользователей с предупреждениями: %s", e)
+            return []
 ```

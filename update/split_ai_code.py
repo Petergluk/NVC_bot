@@ -1,6 +1,6 @@
 # split_ai_code.py
-# v. 2.3.0
-# 2025-07-29T19:45:22.000Z
+# v. 2.5.3
+# 2025-08-07T19:30:00.000Z
 #!/usr/bin/env python3
 """
 Двухрежимный скрипт для работы с кодом проекта.
@@ -17,9 +17,10 @@
 Запуск: python split_ai_code.py gather
 
 --- ИСТОРИЯ ИЗМЕНЕНИЙ ---
-v. 2.3.0: Изменена логика сохранения для файлов журнала (Project_journal.md, project_history.md). Теперь новое содержимое добавляется в конец файла, а не перезаписывает его.
-v. 2.2.0: Добавлена функция выборочной сборки логов. Теперь в сборку попадает только последний по времени лог-файл каждого типа (определяется по префиксу имени).
-v. 2.1.0: Начальная версия файла.
+v. 2.5.3: FINAL FIX: Принудительная синхронизация модулей. Устранена постоянная критическая ошибка в обработке аргументов командной строки (sys.argv[1]).
+v. 2.5.2: CRITICAL FIX: Исправлена регрессия в точке входа. Код приведен в соответствие с намерением (использование sys.argv[1] вместо sys.argv).
+v. 2.5.1: FIX: Исправлена критическая ошибка в точке входа (AttributeError: 'list' object has no attribute 'lower').
+v. 2.5.0: ИСПРАВЛЕНО: Ключевая ошибка в регулярном выражении для поиска блоков кода.
 """
 
 import re
@@ -29,16 +30,15 @@ from pathlib import Path
 from typing import Tuple, Set, List, Dict
 
 # --- КОНФИГУРАЦИЯ СБОРКИ (GATHER) ---
-# template: ["*.py", "*.log", "*.yaml", "*.toml", "*.txt", "project_history.md"]
-
-GATHER_FILE_PATTERNS: List[str] = ["*.py", "*.log", "*.yaml", "*.toml", "project_history.md"]
+GATHER_FILE_PATTERNS: List[str] = ["*.py",  "*.txt", "*.yaml", "*.toml", "*.log", "project_history.md"]
 EXCLUDED_GATHER_DIRS: Set[str] = {"temp", "doc", "update", ".github", ".venv", "__pycache__", ".pytest_cache" ".git"}
-GATHER_SORT_ORDER: Dict[str, int] = {".py": 1, ".env": 2, ".yaml": 3, ".toml": 4, ".gitignore": 5, ".txt":7, "*.md": 8,  ".log": 10}
+GATHER_SORT_ORDER: Dict[str, int] = {".py": 1, ".env": 2, ".yaml": 3, ".toml": 4, ".gitignore": 5, ".txt":7, ".md": 8,  ".log": 10}
 
 # --- ОБЩИЕ РЕГУЛЯРНЫЕ ВЫРАЖЕНИЯ ---
-CODE_BLOCK_RE = re.compile(r"```(\w+)?\n(.*?)```", re.S)
+CODE_BLOCK_RE = re.compile(r"^```(\w+)?\n(.*?)\n^```", re.S | re.M)
 PATH_LINE_RE = re.compile(r"#\s*([^\n\r]+)")
-PATH_CANDIDATE_RE = re.compile(r"^\s*([a-zA-Z0-9._/-]+\/[a-zA-Z0-9._-]+)\s*$", re.MULTILINE)
+PATH_CANDIDATE_RE = re.compile(r"^\s*(?:#\s*)?([a-zA-Z0-9._/-]+\/[a-zA-Z0-9._-]+)\s*$", re.M)
+
 
 # --- ANSI ЦВЕТОВЫЕ КОДЫ ---
 RED = '\033[91m'
@@ -178,32 +178,26 @@ def save_code(target_path: Path, code: str, script_path: Path, project_root: Pat
 
     target_path.parent.mkdir(parents=True, exist_ok=True)
     
-    # --- НОВАЯ ЛОГИКА: Проверка на файл журнала для добавления ---
     is_journal_file = target_path.name in ["Project_journal.md", "project_history.md"]
     status = ""
 
     if is_journal_file and was_overwritten:
-        # Режим добавления для существующих файлов журнала
         content_lines = code.splitlines()
-        # Удаляем заголовок с путем файла, если он есть, чтобы не дублировать его
         if content_lines and PATH_LINE_RE.match(content_lines[0].strip()):
             content_to_append = "\n".join(content_lines[1:])
         else:
             content_to_append = "\n".join(content_lines)
         
-        # Добавляем содержимое в конец файла, гарантируя наличие пустой строки перед новой записью
         with target_path.open("a", encoding="utf-8") as f:
             f.write("\n" + content_to_append.strip() + "\n")
         status = "➕  Дополнено"
     else:
-        # Стандартный режим перезаписи для всех остальных файлов или для нового файла журнала
         target_path.write_text(code, encoding="utf-8")
         status = "🔄  Перезаписан" if was_overwritten else "📝  Сохранен"
 
     new_size = target_path.stat().st_size
     
     significant_reduction = False
-    # Предупреждение о значительном уменьшении размера не применяется для файлов журнала в режиме добавления
     if was_overwritten and not is_journal_file and old_size > 0 and (old_size - new_size) / old_size > 0.1:
         significant_reduction = True
 
@@ -237,7 +231,7 @@ def rollback_changes(changed_files: List[Tuple[Path, Path | None]], script_path:
 def split_files(input_file: Path) -> None:
     """Основная функция режима 'split'."""
     try:
-        raw_text = input_file.read_text(encoding="utf-8")
+        raw_text = "\n" + input_file.read_text(encoding="utf-8").strip() + "\n"
     except FileNotFoundError:
         print(f"❌  Ошибка: Файл не найден по пути '{input_file}'")
         sys.exit(1)
@@ -254,6 +248,7 @@ def split_files(input_file: Path) -> None:
         lang, block_content = match.groups()
         block_content = block_content.strip()
         rel_path, code_to_save, project_root = None, None, None
+        
         internal_result = split_path_and_code(block_content)
         if internal_result:
             rel_path, code_to_save = internal_result
@@ -262,6 +257,7 @@ def split_files(input_file: Path) -> None:
             if path_from_preceding:
                 rel_path = path_from_preceding
                 code_to_save = f"# {rel_path.as_posix()}\n{block_content}\n"
+        
         if rel_path:
             project_name = rel_path.parts[0]
             project_root = find_project_root(script_path, project_name)
@@ -271,13 +267,14 @@ def split_files(input_file: Path) -> None:
             final_path = script_path.parent / f"noname_{noname_count:02d}.{extension}"
             code_to_save = block_content + "\n"
             noname_count += 1
+        
         save_code(final_path, code_to_save, script_path, project_root)
         modified_files.append((final_path, project_root))
         saved_count += 1
         last_pos = match.end()
 
     if not found_blocks:
-        print("❌  Не найдено ни одного блока кода ```…```")
+        print("❌  Не найдено ни одного блока кода ```…```, который начинается и заканчивается на новой строке.")
         return
     print(f"\n{GREEN}✅  Готово! Обработано файлов: {saved_count}{RESET}")
     if modified_files:
@@ -300,7 +297,10 @@ if __name__ == "__main__":
         print("  Режим разбора: python split_ai_code.py <файл_вывода_AI.txt>")
         print("  Режим сборки:  python split_ai_code.py gather")
         sys.exit(1)
+    
+    # ИСПРАВЛЕНО: Берем второй элемент (индекс 1), а не весь список.
     command = sys.argv[1]
+    
     if command.lower() == "gather":
         gather_files()
     else:

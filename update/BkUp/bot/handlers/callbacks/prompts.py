@@ -1,18 +1,16 @@
 # NVC_bot/bot/handlers/callbacks/prompts.py
-# version: 1.8.0
-# 2025-07-30T13:15:00Z
+# version: 2.2.0
+# 2025-08-13T07:45:00Z
 """
 Обработчики инлайн-кнопок для управления системными промптами.
 
-Version 1.8.0:
-- FIX: Заменен вызов `context.user_data.clear()` на безопасную функцию
-       `clear_conversation_user_data` для предотвращения сброса состояния
-       диалога и исправления бага с неработающими диалогами.
+Version 2.2.0:
+- FIX: Исправлен синтаксис отображения переменных в подсказках с `{{...}}`
+       на `{...}` для ясности.
+- FEATURE: В подсказки добавлена переменная `{bot_username}`.
 
-Version 1.7.1:
-- FIX: Убрано отображение полного текста промпта при запросе на его изменение.
-       Это предотвращает сбой при редактировании очень длинных промптов из-за
-       превышения лимита длины сообщения в Telegram.
+Version 2.1.0:
+- FIX: В `send_full_prompt` убрано некорректное экранирование.
 """
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode, MessageLimit
@@ -47,7 +45,7 @@ class PromptCallbackHandler:
             return content, title, back_cb, ret_state, edit_cb, reset_cb
         elif text_type == "moderation_template":
             content = await self.db.get_moderation_task_template()
-            title = "📝 *Промпт Сообщения о Санкции*"
+            title = "📝 *Шаблон Сообщения о Нарушении*"
             back_cb = CallbackPrefix.BACK_TO_MODERATION_SETTINGS
             ret_state = MODERATION_TEMPLATE_MENU
             edit_cb = CallbackPrefix.EDIT_MODERATION_TEMPLATE
@@ -55,7 +53,7 @@ class PromptCallbackHandler:
             return content, title, back_cb, ret_state, edit_cb, reset_cb
         elif text_type == "welcome_prompt":
             content = await self.db.get_welcome_prompt()
-            title = "👋 *Промпт Приветствия*"
+            title = "📝 *Текст Приветствия*"
             back_cb = CallbackPrefix.BACK_TO_WELCOMES_MENU
             ret_state = WELCOME_PROMPT_MENU
             edit_cb = CallbackPrefix.EDIT_WELCOME_PROMPT
@@ -65,33 +63,24 @@ class PromptCallbackHandler:
 
     async def _show_text_management_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE, text_type: str) -> int:
         query = update.callback_query
-        if query:
-            await self._safe_answer_query(query)
+        if query: await self._safe_answer_query(query)
         
         text_content, title, back_cb, ret_state, edit_cb, reset_cb = await self._get_prompt_data(text_type)
-        if text_content is None:
-             return ConversationHandler.END
+        if text_content is None: return ConversationHandler.END
 
         kb = [[InlineKeyboardButton("✏️ Изменить", callback_data=edit_cb)]]
-        
         preview = safe_markdown_preview(text_content, settings.PROMPT_PREVIEW_LENGTH)
         if len(text_content) > settings.PROMPT_PREVIEW_LENGTH:
             kb.append([InlineKeyboardButton("⬇️ Показать полностью", callback_data=f"{CallbackPrefix.SEND_FULL_PROMPT}{text_type}")])
 
-        kb.extend([
-            [InlineKeyboardButton("🔄 Сбросить", callback_data=reset_cb),
-             InlineKeyboardButton("⬅️ Назад", callback_data=back_cb)]
-        ])
-        
+        kb.extend([[InlineKeyboardButton("🔄 Сбросить", callback_data=reset_cb), InlineKeyboardButton("⬅️ Назад", callback_data=back_cb)]])
         text = f"{title}:\n\n{preview}"
-        
         await self._safe_edit_message(query, text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN_V2)
         return ret_state
 
     async def send_full_prompt(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         query = update.callback_query
         prompt_type = query.data.replace(CallbackPrefix.SEND_FULL_PROMPT, "")
-        
         text_content, title, _, ret_state, _, _ = await self._get_prompt_data(prompt_type)
         
         if not text_content:
@@ -99,20 +88,9 @@ class PromptCallbackHandler:
             return ret_state
 
         await query.answer()
-
-        await context.bot.send_message(
-            chat_id=query.message.chat_id,
-            text=f"Полный текст для: {title}",
-            parse_mode=ParseMode.MARKDOWN_V2
-        )
-
+        await context.bot.send_message(chat_id=query.message.chat_id, text=f"Полный текст для: {title}", parse_mode=ParseMode.MARKDOWN_V2)
         for i in range(0, len(text_content), MessageLimit.MAX_TEXT_LENGTH):
-            chunk = text_content[i:i + MessageLimit.MAX_TEXT_LENGTH]
-            await context.bot.send_message(
-                chat_id=query.message.chat_id,
-                text=chunk
-            )
-        
+            await context.bot.send_message(chat_id=query.message.chat_id, text=text_content[i:i + MessageLimit.MAX_TEXT_LENGTH])
         return ret_state
 
     async def show_facilitator_prompt_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -128,39 +106,55 @@ class PromptCallbackHandler:
         return await self._show_text_management_menu(update, context, "welcome_prompt")
 
     async def request_prompt_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        """
-        Запрашивает у пользователя новый текст для промпта, не отображая текущий.
-        Это предотвращает ошибки, связанные с превышением лимита длины сообщения.
-        """
         query = update.callback_query
         await self._safe_answer_query(query)
-        
-        # FIX: Заменяем context.user_data.clear() на безопасную функцию
         clear_conversation_user_data(context)
 
-        cb_data = query.data
-        prompt_type, prompt_text = "", ""
+        cb_data, prompt_type, prompt_text = query.data, "", ""
         
+        # FIX: Убраны двойные скобки, добавлены новые переменные
         if cb_data == CallbackPrefix.EDIT_FACILITATOR_PROMPT:
             prompt_type = "facilitator_prompt"
-            prompt_text = "Отправьте новый текст для *Промпта ИИ\\-Фасилитатора*\\.\n\nДля отмены введите /cancel\\."
+            prompt_text = (
+                "Отправьте новый текст для *Промпта ИИ\\-Фасилитатора*\\.\n\n"
+                "**Доступные переменные:**\n"
+                "`{group_rules}` — описание/правила группы\\.\n"
+                "`{bot_username}` — имя пользователя бота \\(например, `@MyBot`\\)\\.\n\n"
+                "Для отмены введите /cancel\\."
+            )
         elif cb_data == CallbackPrefix.EDIT_MODERATION_PROMPT:
             prompt_type = "moderation_prompt"
-            prompt_text = "Отправьте новый текст для *Промпта Судьи*\\.\n\n*Обязательная переменная:* `{{text}}`\n\nДля отмены введите /cancel\\."
+            prompt_text = (
+                "Отправьте новый текст для *Промпта Судьи*\\.\n\n"
+                "**Обязательные переменные:**\n"
+                "`{text}` — сообщение пользователя для анализа\\.\n"
+                "`{chat_history}` — контекст диалога\\.\n\n"
+                "Для отмены введите /cancel\\."
+            )
         elif cb_data == CallbackPrefix.EDIT_MODERATION_TEMPLATE:
             prompt_type = "moderation_template"
-            prompt_text = "Отправьте новый текст для *Промпта Сообщения о Санкции*\\.\n\n*Доступные переменные:* `{{user_mention}}`, `{{violator_message}}`, `{{warnings_count}}`, `{{rules_list}}`, `{{chat_history}}`\n\nДля отмены введите /cancel\\."
+            prompt_text = (
+                "Отправьте новый текст для *Шаблона Сообщения о Нарушении*\\.\n\n"
+                "**Доступные переменные:**\n"
+                "`{user_mention}`\n`{violator_message}`\n`{warnings_count}`\n"
+                "`{chat_history}`\n`{group_rules}`\n`{bot_username}`\n\n"
+                "Для отмены введите /cancel\\."
+            )
         elif cb_data == CallbackPrefix.EDIT_WELCOME_PROMPT:
             prompt_type = "welcome_prompt"
-            prompt_text = "Отправьте новый текст для *Промпта Приветствия*\\.\n\n*Обязательная переменная:* `{{user_mention}}`\n\nДля отмены введите /cancel\\."
-        else:
-            return ConversationHandler.END
+            prompt_text = (
+                "Отправьте новый текст для *Задачи Приветствия*\\.\n\n"
+                "**Доступные переменные:**\n"
+                "`{user_mention}` — упоминание нового участника\\.\n"
+                "`{group_rules}` — описание/правила группы\\.\n"
+                "`{bot_username}` — имя пользователя бота\\.\n\n"
+                "Для отмены введите /cancel\\."
+            )
+        else: return ConversationHandler.END
             
         context.user_data["prompt_type"] = prompt_type
         context.user_data["original_update"] = update
-        
         await self._safe_edit_message(query, prompt_text, reply_markup=None, parse_mode=ParseMode.MARKDOWN_V2)
-        
         return AWAIT_PROMPT_INPUT
 
     async def reset_prompt_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -179,11 +173,11 @@ class PromptCallbackHandler:
             return await self.show_moderation_prompt_menu(update, context)
         elif cb_data == CallbackPrefix.RESET_MODERATION_TEMPLATE:
             await self.db.reset_moderation_task_template()
-            await query.answer("✅ Промпт Сообщения о Санкции сброшен.")
+            await query.answer("✅ Шаблон Сообщения сброшен.")
             return await self.show_moderation_template_menu(update, context)
         elif cb_data == CallbackPrefix.RESET_WELCOME_PROMPT:
             await self.db.reset_welcome_prompt()
-            await query.answer("✅ Промпт Приветствия сброшен.")
+            await query.answer("✅ Текст Приветствия сброшен.")
             return await self.show_welcome_prompt_menu(update, context)
             
         return ConversationHandler.END

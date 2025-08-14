@@ -1,12 +1,16 @@
 # NVC_bot/bot/handlers/conversations.py
-# version: 3.2.0
-# 2025-07-28T18:00:00Z
+# version: 3.3.0
+# 2025-08-07T16:00:00Z
 """
 ConversationHandler для меню настроек.
 
+Version 3.3.0:
+- ADD: Добавлены состояния и обработчики для нового меню
+       настроек безопасности (`SAFETY_SETTINGS_MENU`).
+
 Version 3.2.0:
 - ADD: Добавлены состояния и обработчики для нового меню
-       настроек контекста (`CONTEXT_SETTINGS`, `AWAIT_CONTEXT_VALUE`).
+       настроек контекста.
 """
 from typing import TYPE_CHECKING
 from telegram.ext import CallbackQueryHandler, CommandHandler, ConversationHandler, MessageHandler, filters
@@ -42,6 +46,7 @@ def setup_conversations(admin_handlers: "AdminHandlers", callback_handlers: "Cal
                 CallbackQueryHandler(callback_handlers.show_facilitator_prompt_menu, pattern=f"^{CallbackPrefix.FACILITATOR_PROMPT}$"),
                 CallbackQueryHandler(callback_handlers.show_welcomes_menu, pattern=f"^{CallbackPrefix.WELCOMES_MENU}$"),
                 CallbackQueryHandler(callback_handlers.show_generation_settings_menu, pattern=f"^{CallbackPrefix.GENERATION_SETTINGS}$"),
+                CallbackQueryHandler(callback_handlers.show_safety_menu, pattern=f"^{CallbackPrefix.SAFETY_SETTINGS}$"),
                 CallbackQueryHandler(callback_handlers.show_context_settings_menu, pattern=f"^{CallbackPrefix.CONTEXT_SETTINGS}$"),
                 CallbackQueryHandler(callback_handlers.toggle_debug_mode, pattern=f"^{CallbackPrefix.TOGGLE_DEBUG_MODE}$"),
             ],
@@ -51,6 +56,7 @@ def setup_conversations(admin_handlers: "AdminHandlers", callback_handlers: "Cal
             WELCOME_PROMPT_MENU: [ *prompt_menu_handlers, CallbackQueryHandler(callback_handlers.show_welcomes_menu, pattern=f"^{CallbackPrefix.BACK_TO_WELCOMES_MENU}$"), ],
             GENERATION_SETTINGS: [ CallbackQueryHandler(callback_handlers.request_generation_value, pattern=f"^{CallbackPrefix.GEN_CONFIG_EDIT}"), CallbackQueryHandler(callback_handlers.reset_generation_config_handler, pattern=f"^{CallbackPrefix.GEN_CONFIG_RESET}$"), CallbackQueryHandler(callback_handlers.show_facilitator_settings_menu, pattern=f"^{CallbackPrefix.BACK_TO_FACILITATOR_SETTINGS}$"), ],
             CONTEXT_SETTINGS: [ CallbackQueryHandler(callback_handlers.request_context_value, pattern=f"^{CallbackPrefix.CONTEXT_CONFIG_EDIT}"), CallbackQueryHandler(callback_handlers.reset_context_config_handler, pattern=f"^{CallbackPrefix.CONTEXT_CONFIG_RESET}$"), CallbackQueryHandler(callback_handlers.show_facilitator_settings_menu, pattern=f"^{CallbackPrefix.BACK_TO_FACILITATOR_SETTINGS}$"), ],
+            SAFETY_SETTINGS_MENU: [ CallbackQueryHandler(callback_handlers.set_safety_level, pattern=f"^{CallbackPrefix.SAFETY_SET_LEVEL}"), CallbackQueryHandler(callback_handlers.show_facilitator_settings_menu, pattern=f"^{CallbackPrefix.BACK_TO_FACILITATOR_SETTINGS}$"), ],
             MODERATION_SETTINGS: [ CallbackQueryHandler(callback_handlers.toggle_moderation, pattern=f"^{CallbackPrefix.MODERATE_TOGGLE}$"), CallbackQueryHandler(callback_handlers.show_moderation_prompt_menu, pattern=f"^{CallbackPrefix.MODERATE_PROMPT}$"), CallbackQueryHandler(callback_handlers.show_moderation_template_menu, pattern=f"^{CallbackPrefix.MODERATE_TEMPLATE}$"), CallbackQueryHandler(callback_handlers.show_moderation_model_menu, pattern=f"^{CallbackPrefix.MODERATE_MODEL}$"), CallbackQueryHandler(callback_handlers.show_sanctions_menu, pattern=f"^{CallbackPrefix.MODERATE_SANCTIONS}$"), CallbackQueryHandler(callback_handlers.show_users_menu, pattern=f"^{CallbackPrefix.MODERATE_USERS}$"), CallbackQueryHandler(callback_handlers.show_triggers_menu, pattern=f"^{CallbackPrefix.MANAGE_TRIGGERS}$"), CallbackQueryHandler(callback_handlers.show_exceptions_menu, pattern=f"^{CallbackPrefix.MANAGE_EXCEPTIONS}$"), ],
             MODERATION_PROMPT_MENU: [ *prompt_menu_handlers, CallbackQueryHandler(callback_handlers.show_moderate_settings_menu, pattern=f"^{CallbackPrefix.BACK_TO_MODERATION_SETTINGS}$"), ],
             MODERATION_TEMPLATE_MENU: [ *prompt_menu_handlers, CallbackQueryHandler(callback_handlers.show_moderate_settings_menu, pattern=f"^{CallbackPrefix.BACK_TO_MODERATION_SETTINGS}$"), ],

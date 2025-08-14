@@ -17,6 +17,7 @@ __pycache__/
 .venv/
 venv/
 env/
+update/
 
 # Файлы IDE
 .idea/
@@ -25,3 +26,4 @@ env/
 # Специфичные для Windows/macOS
 Thumbs.db
 .DS_Store
+*.bat

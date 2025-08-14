@@ -1,14 +1,20 @@
 # NVC_bot/bot/handlers/callbacks/moderation.py
-# version: 1.3.1
-# 2025-07-28T19:15:00Z
+# version: 2.0.0
+# 2025-08-12T15:45:00Z
 """
 Обработчики инлайн-кнопок для меню настроек Модерации.
 
-Version 1.3.1:
-- FIX: Имена пользователей теперь экранируются для безопасного отображения
-       в MarkdownV2, что предотвращает ошибки парсинга.
-- REFACTOR: Все сообщения переведены на `ParseMode.MARKDOWN_V2`.
-- FIX: Восстановлены все методы для предоставления полной версии файла.
+Version 2.0.0:
+- FEATURE: В главное меню модерации добавлена кнопка "Шаблон Сообщения"
+           для управления текстом, который бот отправляет при нарушении.
+- FEATURE: В меню установки санкций теперь отображается текущее значение
+           количества варнов для данного правила.
+- FIX: Некорректный текст на кнопке "Промпт Фасилитатора" заменен на
+       "Шаблон Сообщения", что соответствует ее реальной функции.
+
+Version 1.4.0:
+- FIX: Устранено некорректное экранирование имен моделей в кнопках.
+- FEATURE: Внедрены человекочитаемые имена моделей в UI из `MODEL_NAME_MAP`.
 """
 from typing import Tuple
 
@@ -16,6 +22,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes, ConversationHandler
 
+from ...config import MODEL_NAME_MAP
 from ...utils.formatters import escape_markdown_v2
 from ..states import (MODERATION_SETTINGS, MODERATION_MODEL_MENU,
                       SANCTIONS_MENU, AWAIT_SANCTION_VALUE, USERS_MENU)
@@ -28,16 +35,20 @@ class ModerationCallbackHandler:
         """Отображает главное меню настроек модерации."""
         query = update.callback_query
         message = update.effective_message
-        await self._safe_answer_query(query)
+        if query:
+            await self._safe_answer_query(query)
 
         mod_enabled = await self.db.is_moderation_enabled()
         mod_status = "✅ Включена" if mod_enabled else "❌ Выключена"
-        mod_model = await self.db.get_moderation_model()
+        
+        mod_model_id = await self.db.get_moderation_model()
+        mod_model_display_name = MODEL_NAME_MAP.get(mod_model_id, mod_model_id)
 
         kb = [
             [InlineKeyboardButton(mod_status, callback_data=CallbackPrefix.MODERATE_TOGGLE)],
-            [InlineKeyboardButton("🔍 Промпт Судьи", callback_data=CallbackPrefix.MODERATE_PROMPT), InlineKeyboardButton("📝 Промпт Санкций", callback_data=CallbackPrefix.MODERATE_TEMPLATE)],
-            [InlineKeyboardButton(f"⚖️ Модель: {escape_markdown_v2(mod_model)}", callback_data=CallbackPrefix.MODERATE_MODEL), InlineKeyboardButton("🔨 Санкции", callback_data=CallbackPrefix.MODERATE_SANCTIONS)],
+            # FIX: Кнопка "Промпт Фасилитатора" заменена на актуальную "Шаблон Сообщения"
+            [InlineKeyboardButton("🔍 Промпт Судьи", callback_data=CallbackPrefix.MODERATE_PROMPT), InlineKeyboardButton("📝 Шаблон Сообщения", callback_data=CallbackPrefix.MODERATE_TEMPLATE)],
+            [InlineKeyboardButton(f"⚖️ Модель: {mod_model_display_name}", callback_data=CallbackPrefix.MODERATE_MODEL), InlineKeyboardButton("🔨 Санкции", callback_data=CallbackPrefix.MODERATE_SANCTIONS)],
             [InlineKeyboardButton("🎯 Триггеры", callback_data=CallbackPrefix.MANAGE_TRIGGERS), InlineKeyboardButton("🛡️ Исключения", callback_data=CallbackPrefix.MANAGE_EXCEPTIONS)],
             [InlineKeyboardButton("👥 Пользователи", callback_data=CallbackPrefix.MODERATE_USERS)],
             [InlineKeyboardButton("❌ Закрыть", callback_data=CallbackPrefix.CLOSE_MENU)]
@@ -56,7 +67,6 @@ class ModerationCallbackHandler:
         """Переключает статус модерации (вкл/выкл)."""
         query = update.callback_query
         await self._safe_answer_query(query)
-        await self._disable_keyboard(query)
         
         new_state = await self.db.toggle_moderation()
         await query.answer(f"Модерация {'включена' if new_state else 'выключена'}")
@@ -68,10 +78,18 @@ class ModerationCallbackHandler:
         query = update.callback_query
         await self._safe_answer_query(query)
         
-        current = await self.db.get_moderation_model()
-        text = f"⚖️ *Выбор ИИ\\-Судьи*\n\nТекущий судья: *{escape_markdown_v2(current)}*"
+        current_model_id = await self.db.get_moderation_model()
+        current_model_display_name = MODEL_NAME_MAP.get(current_model_id, current_model_id)
         
-        kb = [[InlineKeyboardButton(("✅ " if name == current else "") + escape_markdown_v2(name), callback_data=f"{CallbackPrefix.MODERATE_SET_MODEL}{name}")] for name in self.gemini.get_available_models()]
+        text = f"⚖️ *Выбор ИИ\\-Судьи*\n\nТекущий судья: *{escape_markdown_v2(current_model_display_name)}*"
+        
+        kb = []
+        for model_id in self.gemini.get_available_models():
+            display_name = MODEL_NAME_MAP.get(model_id, model_id)
+            button_text = ("✅ " if model_id == current_model_id else "") + display_name
+            callback_data = f"{CallbackPrefix.MODERATE_SET_MODEL}{model_id}"
+            kb.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
+
         kb.append([InlineKeyboardButton("⬅️ Назад", callback_data=CallbackPrefix.BACK_TO_MODERATION_SETTINGS)])
         
         await self._safe_edit_message(query, text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN_V2)
@@ -80,12 +98,12 @@ class ModerationCallbackHandler:
     async def set_moderation_model(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         """Устанавливает новую модель для модерации."""
         query = update.callback_query
-        await self._safe_answer_query(query)
-        await self._disable_keyboard(query)
         
-        model = query.data.replace(CallbackPrefix.MODERATE_SET_MODEL, "")
-        await self.db.set_moderation_model(model)
-        await query.answer(f"ИИ-Судья переключён на {model}")
+        model_id = query.data.replace(CallbackPrefix.MODERATE_SET_MODEL, "")
+        await self.db.set_moderation_model(model_id)
+        
+        display_name = MODEL_NAME_MAP.get(model_id, model_id)
+        await query.answer(f"ИИ-Судья переключён на {display_name}")
         
         return await self.show_moderation_model_menu(update, context)
 
@@ -99,9 +117,9 @@ class ModerationCallbackHandler:
         ban = rules_map.get(('BAN', None))
         
         rules_lines = [
-            f"• Мьют на сутки \\- *{mute_24}* пред\\." if mute_24 else "• Мьют на сутки \\- *отключен*",
-            f"• Мьют на неделю \\- *{mute_168}* пред\\." if mute_168 else "• Мьют на неделю \\- *отключен*",
-            f"• Бан \\- *{ban}* пред\\." if ban else "• Бан \\- *отключен*"
+            f"• Мьют на сутки \\- *{mute_24 or 'отключен'}* пред\\.",
+            f"• Мьют на неделю \\- *{mute_168 or 'отключен'}* пред\\.",
+            f"• Бан \\- *{ban or 'отключен'}* пред\\."
         ]
         text = "🔨 *Настройка правил санкций*\n\n*Текущие правила:*\n" + "\n".join(rules_lines)
         
@@ -133,17 +151,26 @@ class ModerationCallbackHandler:
         context.user_data["current_sanction"] = {"action": action, "duration_hours": duration}
         context.user_data["original_update"] = update
         
-        txt = ""
-        if action == 'BAN':
-            txt = "бана"
-        elif duration == 24:
-            txt = "мьюта на сутки"
-        elif duration == 168:
-            txt = "мьюта на неделю"
-        
+        # FEATURE: Получаем текущее значение для отображения в подсказке
+        rules = await self.db.get_sanction_rules()
+        current_value_str = "не установлено"
+        for rule in rules:
+            if rule.get("action") == action and rule.get("duration_hours") == duration:
+                current_value_str = str(rule.get("warnings", "ошибка"))
+                break
+
+        rule_name_map = { ('MUTE', 24): "мьюта на сутки", ('MUTE', 168): "мьюта на неделю", ('BAN', None): "бана", }
+        rule_name = rule_name_map.get((action, duration), "неизвестного правила")
+
+        message_text = (
+            f"Введите количество предупреждений для *{rule_name}*\\.\n\n"
+            f"*Текущее значение: `{current_value_str}`*\\.\n"
+            f"Отправьте целое число\\. `0` — чтобы отключить правило\\."
+        )
+
         await self._safe_edit_message(
             query,
-            f"Введите количество предупреждений для *{txt}*\\.\nЧисло `0` удалит правило\\.",
+            message_text,
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Отмена", callback_data=CallbackPrefix.BACK_TO_SANCTIONS_MENU)]]),
             parse_mode=ParseMode.MARKDOWN_V2
         )
@@ -152,17 +179,23 @@ class ModerationCallbackHandler:
     async def sanction_set_value(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         """Устанавливает новое значение для правила санкции."""
         msg = update.message
+        original_update = context.user_data.get('original_update')
+        
         try:
             warns = int(msg.text.strip())
             if warns < 0: raise ValueError
         except (ValueError, TypeError):
-            await msg.reply_text("❌ Введите целое неотрицательное число\\.")
+            await msg.delete()
+            if original_update and original_update.callback_query:
+                await self._safe_edit_message(original_update.callback_query, "❌ Введите целое неотрицательное число\\.", parse_mode=ParseMode.MARKDOWN_V2)
             return AWAIT_SANCTION_VALUE
 
         sanction = context.user_data.pop("current_sanction", None)
         if not sanction:
-            await msg.reply_text("❌ Внутренняя ошибка\\.")
-            return await self.show_moderate_settings_menu(update, context)
+            await msg.delete()
+            if original_update and original_update.callback_query:
+                await self._safe_edit_message(original_update.callback_query, "❌ Внутренняя ошибка, попробуйте снова\\.", parse_mode=ParseMode.MARKDOWN_V2)
+            return SANCTIONS_MENU
 
         rules = await self.db.get_sanction_rules()
         rules = [r for r in rules if not (r["action"] == sanction["action"] and r.get("duration_hours") == sanction.get("duration_hours"))]
@@ -173,7 +206,7 @@ class ModerationCallbackHandler:
         await self.db.set_sanction_rules(rules)
         await context.bot.delete_message(msg.chat_id, msg.message_id)
         
-        original_update = context.user_data.pop('original_update', None)
+        context.user_data.pop('original_update', None)
         if original_update and original_update.callback_query:
             await self._safe_answer_query(original_update.callback_query, "✅ Правила обновлены.")
             text, reply_markup = await self._get_sanctions_menu_content()
@@ -197,7 +230,7 @@ class ModerationCallbackHandler:
                 try:
                     tg_user = await context.bot.get_chat(uid)
                     uname = escape_markdown_v2(f"@{tg_user.username}" if tg_user.username else tg_user.full_name)
-                    btn_uname = escape_markdown_v2(tg_user.username or tg_user.first_name)
+                    btn_uname = tg_user.username or tg_user.first_name
                 except Exception:
                     uname = f"`{uid}`"
                     btn_uname = f"ID: {uid}"
@@ -212,8 +245,6 @@ class ModerationCallbackHandler:
     async def reset_user_warnings(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         """Сбрасывает предупреждения для конкретного пользователя."""
         query = update.callback_query
-        await self._safe_answer_query(query)
-        await self._disable_keyboard(query)
         
         uid = int(query.data.replace(CallbackPrefix.RESET_WARNS, ""))
         await self.db.reset_warnings(uid)

@@ -1,35 +1,39 @@
 # NVC_bot/bot/handlers/callbacks/facilitator.py
-# version: 1.7.0
-# 2025-07-29T18:00:00Z
+# version: 2.0.0
+# 2025-08-07T16:00:00Z
 """
 Обработчики инлайн-кнопок для меню настроек Фасилитатора.
 
-Version 1.7.0:
-- AUDIT-FIX: Полностью переработаны описания режима отладки для ясности.
-             Описание теперь отображается только при включенном режиме.
+Version 2.0.0:
+- FEATURE: Добавлено меню управления настройками безопасности (`safety_settings`).
 
-Version 1.6.0:
-- AUDIT-FIX: Обновлены тексты для режима отладки.
+Version 1.9.0:
+- FIX: Устранено некорректное экранирование имен моделей в кнопках.
+- FEATURE: Внедрены человекочитаемые имена моделей в UI.
 """
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
+from ...config import MODEL_NAME_MAP, SAFETY_LEVEL_MAP
 from ...utils.formatters import format_stats_text, escape_markdown_v2
-from ..states import FACILITATOR_SETTINGS
+from ..states import FACILITATOR_SETTINGS, SAFETY_SETTINGS_MENU
 from .callback_patterns import CallbackPrefix
+from .base import BaseCallbackHandler
 
 
-class FacilitatorCallbackHandler:
+class FacilitatorCallbackHandler(BaseCallbackHandler):
     """Обработчики для ветки /settings."""
 
     async def show_facilitator_settings_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         """Показывает главное меню настроек Фасилитатора."""
         query = update.callback_query
         message = update.effective_message
-        await self._safe_answer_query(query)
+        if query:
+            await self._safe_answer_query(query)
         
-        model_status = self.gemini.get_current_model()
+        model_id = await self.db.get_main_model()
+        model_display_name = MODEL_NAME_MAP.get(model_id, model_id)
         debug_mode_enabled = await self.db.is_debug_mode_enabled()
         
         debug_desc = ""
@@ -38,23 +42,25 @@ class FacilitatorCallbackHandler:
             debug_desc = "_Режим отладки включен\\. В личном чате сообщения, не адресованные боту, логируются как заметки и не отправляются AI\\. Ответы содержат техническую информацию\\._"
         else:
             debug_status = "❌ Выкл"
-            # В штатном режиме описание не нужно
 
         kb = [
             [
-                InlineKeyboardButton(f"🤖 Модель ИИ: {escape_markdown_v2(model_status)}", callback_data=CallbackPrefix.FACILITATOR_MODEL),
+                InlineKeyboardButton(f"🤖 Модель ИИ: {model_display_name}", callback_data=CallbackPrefix.FACILITATOR_MODEL),
                 InlineKeyboardButton("📜 Промпт", callback_data=CallbackPrefix.FACILITATOR_PROMPT)
             ],
             [
                 InlineKeyboardButton("⚙️ Генерация", callback_data=CallbackPrefix.GENERATION_SETTINGS),
-                InlineKeyboardButton("📚 Контекст", callback_data=CallbackPrefix.CONTEXT_SETTINGS)
+                InlineKeyboardButton("🛡️ Безопасность", callback_data=CallbackPrefix.SAFETY_SETTINGS)
             ],
             [
-                InlineKeyboardButton("👋 Приветствия", callback_data=CallbackPrefix.WELCOMES_MENU),
-                InlineKeyboardButton(f"🐞 Отладка: {debug_status}", callback_data=CallbackPrefix.TOGGLE_DEBUG_MODE)
+                InlineKeyboardButton("📚 Контекст", callback_data=CallbackPrefix.CONTEXT_SETTINGS),
+                InlineKeyboardButton("👋 Приветствия", callback_data=CallbackPrefix.WELCOMES_MENU)
             ],
             [
-                InlineKeyboardButton("📊 Статистика", callback_data=CallbackPrefix.FACILITATOR_STATS),
+                InlineKeyboardButton(f"🐞 Отладка: {debug_status}", callback_data=CallbackPrefix.TOGGLE_DEBUG_MODE),
+                InlineKeyboardButton("📊 Статистика", callback_data=CallbackPrefix.FACILITATOR_STATS)
+            ],
+            [
                 InlineKeyboardButton("❌ Закрыть", callback_data=CallbackPrefix.CLOSE_MENU)
             ]
         ]
@@ -89,10 +95,18 @@ class FacilitatorCallbackHandler:
         query = update.callback_query
         await self._safe_answer_query(query)
         
-        current = self.gemini.get_current_model()
-        text = f"🤖 *Выбор основной AI\\-модели*\n\nТекущая модель: *{escape_markdown_v2(current)}*"
+        current_model_id = await self.db.get_main_model()
+        current_model_display_name = MODEL_NAME_MAP.get(current_model_id, current_model_id)
         
-        kb = [[InlineKeyboardButton(("✅ " if name == current else "") + escape_markdown_v2(name), callback_data=f"{CallbackPrefix.FACILITATOR_SET_MODEL}{name}")] for name in self.gemini.get_available_models()]
+        text = f"🤖 *Выбор основной AI\\-модели*\n\nТекущая модель: *{escape_markdown_v2(current_model_display_name)}*"
+        
+        kb = []
+        for model_id in self.gemini.get_available_models():
+            display_name = MODEL_NAME_MAP.get(model_id, model_id)
+            button_text = ("✅ " if model_id == current_model_id else "") + display_name
+            callback_data = f"{CallbackPrefix.FACILITATOR_SET_MODEL}{model_id}"
+            kb.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
+            
         kb.append([InlineKeyboardButton("⬅️ Назад", callback_data=CallbackPrefix.BACK_TO_FACILITATOR_SETTINGS)])
         
         await self._safe_edit_message(query, text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN_V2)
@@ -101,14 +115,12 @@ class FacilitatorCallbackHandler:
     async def switch_facilitator_model(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         """Переключает основную AI-модель."""
         query = update.callback_query
-        await self._safe_answer_query(query)
-        await self._disable_keyboard(query)
         
-        model = query.data.replace(CallbackPrefix.FACILITATOR_SET_MODEL, "")
-        if self.gemini.switch_model(model):
-            await query.answer(f"Модель переключена на {model}")
-        else:
-            await query.answer("Не удалось переключить модель.", show_alert=True)
+        model_name = query.data.replace(CallbackPrefix.FACILITATOR_SET_MODEL, "")
+        await self.db.set_main_model(model_name)
+        
+        display_name = MODEL_NAME_MAP.get(model_name, model_name)
+        await self._safe_answer_query(query, f"Основная модель переключена на {display_name}")
             
         return await self.show_facilitator_model_menu(update, context)
 
@@ -122,3 +134,41 @@ class FacilitatorCallbackHandler:
         
         await self._safe_edit_message(query, format_stats_text(stats), reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN_V2)
         return FACILITATOR_SETTINGS
+
+    async def show_safety_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        """Показывает меню выбора уровня безопасности."""
+        query = update.callback_query
+        await self._safe_answer_query(query)
+        
+        current_level = await self.db.get_safety_level()
+        
+        text = (
+            f"🛡️ *Настройки Безопасности*\n\n"
+            f"Этот параметр контролирует, насколько строго ИИ фильтрует потенциально небезопасный контент\\. "
+            f"Настройка **не влияет** на ИИ\\-Судью, который всегда анализирует сообщения без фильтров\\.\n\n"
+            f"Текущий уровень: *{escape_markdown_v2(SAFETY_LEVEL_MAP.get(current_level, 'Неизвестный'))}*"
+        )
+        
+        kb = []
+        for level_id, level_name in SAFETY_LEVEL_MAP.items():
+            button_text = ("✅ " if level_id == current_level else "") + level_name
+            callback_data = f"{CallbackPrefix.SAFETY_SET_LEVEL}{level_id}"
+            kb.append([InlineKeyboardButton(button_text, callback_data=callback_data)])
+            
+        kb.append([InlineKeyboardButton("⬅️ Назад", callback_data=CallbackPrefix.BACK_TO_FACILITATOR_SETTINGS)])
+        
+        await self._safe_edit_message(query, text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN_V2)
+        return SAFETY_SETTINGS_MENU
+
+    async def set_safety_level(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        """Устанавливает новый уровень безопасности."""
+        query = update.callback_query
+        
+        level_id = query.data.replace(CallbackPrefix.SAFETY_SET_LEVEL, "")
+        if level_id in SAFETY_LEVEL_MAP:
+            await self.db.set_safety_level(level_id)
+            await self._safe_answer_query(query, f"Уровень безопасности изменен.")
+        else:
+            await self._safe_answer_query(query, "Ошибка: неизвестный уровень безопасности.")
+            
+        return await self.show_safety_menu(update, context)

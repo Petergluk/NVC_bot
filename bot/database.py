@@ -1,28 +1,27 @@
 # NVC_bot/bot/database.py
-# version: 2.0.1
-# 2025-07-29T15:20:00Z
+# version: 2.5.2
+# 2025-08-14T15:00:00Z
 """
 Модуль для асинхронной работы с базой данных SQLite.
 
-Version 2.0.1:
-- FIX: В методе `get_chat_history` убрано добавление имени пользователя в текст сообщения.
-       Это соответствует новому, более чистому подходу к формированию истории,
-       где имя пользователя добавляется в `user.py` только для последнего сообщения.
+Version 2.5.2:
+- FIX: `get_usage_statistics` теперь использует параметризованные запросы
+       с объектами datetime, отформатированными в строки ISO, что
+       окончательно решает проблему с некорректной фильтрацией по датам.
 
-Version 2.0.0:
-- REFACTOR: Метод `get_chat_history` полностью переработан.
-            - Теперь он возвращает список словарей (`List[Dict]`) вместо строки.
-            - Запрос к БД теперь использует `ORDER BY timestamp ASC` для прямого
-              получения сообщений в хронологическом порядке.
+Version 2.5.1:
+- FIX: Исправлен SQL-запрос в `get_usage_statistics` для корректной
+       фильтрации по датам.
 """
 import logging
 import json
 from typing import Any, Dict, List, Optional, Type, TypeVar
 from collections import defaultdict
+import datetime
 
 import aiosqlite
 
-from .config import DATA_DIR, settings
+from .config import DATA_DIR, settings, _load_prompt
 
 logger = logging.getLogger(__name__)
 T = TypeVar('T')
@@ -51,12 +50,45 @@ class Database:
         if not self.conn: raise RuntimeError("Подключение к БД не инициализировано.")
         async with self.conn.cursor() as cursor:
             await cursor.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
-            await cursor.execute("CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, chat_id INTEGER NOT NULL, user_name TEXT NOT NULL, text TEXT NOT NULL, is_bot BOOLEAN NOT NULL, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP)")
+            await cursor.execute("""
+                CREATE TABLE IF NOT EXISTS messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER NOT NULL,
+                    message_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    user_name TEXT NOT NULL,
+                    text TEXT,
+                    is_bot BOOLEAN NOT NULL,
+                    reply_to_message_id INTEGER,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
             await cursor.execute("CREATE TABLE IF NOT EXISTS statistics (key TEXT PRIMARY KEY, value INTEGER NOT NULL)")
             await cursor.execute("CREATE TABLE IF NOT EXISTS user_warnings (user_id INTEGER PRIMARY KEY, count INTEGER NOT NULL DEFAULT 0)")
             await cursor.execute("CREATE TABLE IF NOT EXISTS moderation_triggers (id INTEGER PRIMARY KEY AUTOINCREMENT, trigger_word TEXT NOT NULL UNIQUE, category TEXT NOT NULL DEFAULT 'general')")
             await cursor.execute("CREATE TABLE IF NOT EXISTS moderation_exceptions (id INTEGER PRIMARY KEY AUTOINCREMENT, exception_phrase TEXT NOT NULL UNIQUE, category TEXT NOT NULL DEFAULT 'general')")
             
+            await cursor.execute("""
+                CREATE TABLE IF NOT EXISTS api_usage_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    model_id TEXT NOT NULL,
+                    request_type TEXT NOT NULL,
+                    prompt_tokens INTEGER NOT NULL DEFAULT 0,
+                    completion_tokens INTEGER NOT NULL DEFAULT 0,
+                    total_tokens INTEGER NOT NULL DEFAULT 0
+                )
+            """)
+
+            await cursor.execute("PRAGMA table_info(messages)")
+            columns = [row['name'] for row in await cursor.fetchall()]
+            if 'message_id' not in columns:
+                await cursor.execute("ALTER TABLE messages ADD COLUMN message_id INTEGER NOT NULL DEFAULT 0")
+            if 'user_id' not in columns:
+                await cursor.execute("ALTER TABLE messages ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0")
+            if 'reply_to_message_id' not in columns:
+                await cursor.execute("ALTER TABLE messages ADD COLUMN reply_to_message_id INTEGER")
+
             await cursor.execute("PRAGMA table_info(moderation_triggers)")
             if 'category' not in [row['name'] for row in await cursor.fetchall()]:
                 await cursor.execute("ALTER TABLE moderation_triggers ADD COLUMN category TEXT NOT NULL DEFAULT 'general'")
@@ -64,6 +96,7 @@ class Database:
             await cursor.execute("PRAGMA table_info(moderation_exceptions)")
             if 'category' not in [row['name'] for row in await cursor.fetchall()]:
                 await cursor.execute("ALTER TABLE moderation_exceptions ADD COLUMN category TEXT NOT NULL DEFAULT 'general'")
+
         await self.conn.commit()
 
     async def populate_defaults(self):
@@ -186,11 +219,10 @@ class Database:
             return []
         history = []
         try:
-            query = "SELECT text, is_bot FROM (SELECT text, is_bot, timestamp FROM messages WHERE chat_id = ? ORDER BY timestamp DESC LIMIT ?) ORDER BY timestamp ASC"
+            query = "SELECT message_id, user_name, text, is_bot, reply_to_message_id FROM (SELECT message_id, user_name, text, is_bot, reply_to_message_id, timestamp FROM messages WHERE chat_id = ? ORDER BY timestamp DESC LIMIT ?) ORDER BY timestamp ASC"
             async with self.conn.execute(query, (chat_id, limit)) as cursor:
                 async for row in cursor:
-                    role = "model" if row["is_bot"] else "user"
-                    history.append({"role": role, "parts": [{"text": row["text"]}]})
+                    history.append(dict(row))
             return history
         except aiosqlite.Error as e:
             logger.error("Ошибка БД при получении истории чата %d: %s", chat_id, e)
@@ -256,6 +288,15 @@ class Database:
         for key in ["gen_temp", "gen_top_p", "gen_top_k", "gen_max_tokens"]: await self._delete_setting(key)
         logger.info("Параметры генерации AI сброшены.")
 
+    async def get_safety_level(self) -> str:
+        return await self._get_setting("safety_level", settings.DEFAULT_SAFETY_LEVEL)
+
+    async def set_safety_level(self, level: str):
+        await self._set_setting("safety_level", level)
+
+    async def reset_safety_level(self):
+        await self._delete_setting("safety_level")
+
     async def is_debug_mode_enabled(self) -> bool:
         return await self._get_setting("debug_mode_enabled", "false", str) == "true"
 
@@ -264,32 +305,41 @@ class Database:
         await self._set_setting("debug_mode_enabled", "true" if new_state else "false")
         return new_state
 
+    async def get_main_model(self) -> str:
+        return await self._get_setting("main_model", settings.GEMINI_PRO_MODEL)
+
+    async def set_main_model(self, model_name: str):
+        await self._set_setting("main_model", model_name)
+
+    async def reset_main_model(self):
+        await self._delete_setting("main_model")
+
     async def get_prompt(self) -> str:
-        return await self._get_setting("system_prompt", settings.DEFAULT_SYSTEM_PROMPT)
+        return await self._get_setting("system_prompt", _load_prompt("default_system_prompt.txt"))
 
     async def set_prompt(self, prompt: str):
         await self._set_setting("system_prompt", prompt)
 
     async def reset_prompt(self):
-        await self._set_setting("system_prompt", settings.DEFAULT_SYSTEM_PROMPT)
+        await self._set_setting("system_prompt", _load_prompt("default_system_prompt.txt"))
 
     async def get_moderation_prompt(self) -> str:
-        return await self._get_setting("moderation_prompt", settings.DEFAULT_MODERATION_PROMPT)
+        return await self._get_setting("moderation_prompt", _load_prompt("default_moderation_prompt.txt"))
 
     async def set_moderation_prompt(self, prompt: str):
         await self._set_setting("moderation_prompt", prompt)
 
     async def reset_moderation_prompt(self):
-        await self._set_setting("moderation_prompt", settings.DEFAULT_MODERATION_PROMPT)
+        await self._set_setting("moderation_prompt", _load_prompt("default_moderation_prompt.txt"))
 
     async def get_moderation_task_template(self) -> str:
-        return await self._get_setting("moderation_task_template", settings.DEFAULT_MODERATION_TASK_TEMPLATE)
+        return await self._get_setting("moderation_task_template", _load_prompt("default_moderation_task_template.txt"))
 
     async def set_moderation_task_template(self, template: str):
         await self._set_setting("moderation_task_template", template)
 
     async def reset_moderation_task_template(self):
-        await self._set_setting("moderation_task_template", settings.DEFAULT_MODERATION_TASK_TEMPLATE)
+        await self._set_setting("moderation_task_template", _load_prompt("default_moderation_task_template.txt"))
 
     async def get_moderation_model(self) -> str:
         return await self._get_setting("moderation_model", settings.DEFAULT_MODERATION_MODEL)
@@ -320,13 +370,13 @@ class Database:
         await self._set_setting("welcome_model", model_name)
 
     async def get_welcome_prompt(self) -> str:
-        return await self._get_setting("welcome_prompt", settings.DEFAULT_WELCOME_PROMPT)
+        return await self._get_setting("welcome_prompt", _load_prompt("default_welcome_prompt.txt"))
 
     async def set_welcome_prompt(self, prompt: str):
         await self._set_setting("welcome_prompt", prompt)
 
     async def reset_welcome_prompt(self):
-        await self._set_setting("welcome_prompt", settings.DEFAULT_WELCOME_PROMPT)
+        await self._set_setting("welcome_prompt", _load_prompt("default_welcome_prompt.txt"))
 
     async def get_sanction_rules(self) -> List[Dict]:
         try:
@@ -339,10 +389,13 @@ class Database:
     async def set_sanction_rules(self, rules: List[Dict]):
         await self._set_setting("sanction_rules", json.dumps(rules))
 
-    async def add_message(self, chat_id: int, user_name: str, text: str, is_bot: bool):
+    async def add_message(self, chat_id: int, message_id: int, user_id: int, user_name: str, text: Optional[str], is_bot: bool, reply_to_message_id: Optional[int] = None):
         if not self.conn: return
         try:
-            await self.conn.execute("INSERT INTO messages (chat_id, user_name, text, is_bot) VALUES (?, ?, ?, ?)", (chat_id, user_name, text, is_bot))
+            await self.conn.execute(
+                "INSERT INTO messages (chat_id, message_id, user_id, user_name, text, is_bot, reply_to_message_id) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (chat_id, message_id, user_id, user_name, text, is_bot, reply_to_message_id)
+            )
             await self.conn.commit()
         except aiosqlite.Error as e:
             logger.error("Ошибка БД при добавлении сообщения: %s", e)
@@ -387,6 +440,71 @@ class Database:
         except aiosqlite.Error as e:
             logger.error("Ошибка БД при сборе общей статистики: %s", e)
             return {}
+
+    async def log_api_usage(self, model_id: str, request_type: str, usage_metadata: Dict[str, Any]):
+        """Записывает информацию об использовании API в базу данных."""
+        if not self.conn or not usage_metadata:
+            return
+        query = """
+            INSERT INTO api_usage_log (model_id, request_type, prompt_tokens, completion_tokens, total_tokens)
+            VALUES (?, ?, ?, ?, ?)
+        """
+        try:
+            await self.conn.execute(query, (
+                model_id,
+                request_type,
+                usage_metadata.get("prompt_token_count", 0),
+                usage_metadata.get("candidates_token_count", 0),
+                usage_metadata.get("total_token_count", 0),
+            ))
+            await self.conn.commit()
+        except aiosqlite.Error as e:
+            logger.error("Ошибка БД при записи лога использования API: %s", e)
+
+    async def get_usage_statistics(self) -> Dict[str, Any]:
+        """Собирает и агрегирует статистику использования API по разным периодам."""
+        if not self.conn:
+            return {}
+
+        stats: Dict[str, Any] = {
+            'today': defaultdict(lambda: defaultdict(int)),
+            'yesterday': defaultdict(lambda: defaultdict(int)),
+            'week': defaultdict(lambda: defaultdict(int)),
+            'month': defaultdict(lambda: defaultdict(int)),
+        }
+        
+        today_utc = datetime.datetime.now(datetime.timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        periods = {
+            'today': (today_utc, today_utc + datetime.timedelta(days=1)),
+            'yesterday': (today_utc - datetime.timedelta(days=1), today_utc),
+            'week': (today_utc - datetime.timedelta(days=today_utc.weekday()), today_utc + datetime.timedelta(days=1)),
+            'month': (today_utc.replace(day=1), today_utc + datetime.timedelta(days=1)),
+        }
+        
+        try:
+            for period_name, (start_dt, end_dt) in periods.items():
+                query = """
+                    SELECT
+                        model_id,
+                        COUNT(*) as request_count,
+                        SUM(total_tokens) as total_tokens
+                    FROM api_usage_log
+                    WHERE timestamp >= ? AND timestamp < ?
+                    GROUP BY model_id
+                """
+                # Конвертируем datetime в строки формата, который точно понимает SQLite
+                start_str = start_dt.strftime('%Y-%m-%d %H:%M:%S')
+                end_str = end_dt.strftime('%Y-%m-%d %H:%M:%S')
+
+                async with self.conn.execute(query, (start_str, end_str)) as cursor:
+                    async for row in cursor:
+                        stats[period_name][row['model_id']]['requests'] = row['request_count']
+                        stats[period_name][row['model_id']]['tokens'] = row['total_tokens']
+        except aiosqlite.Error as e:
+            logger.error("Ошибка БД при сборе статистики использования API: %s", e)
+
+        return stats
 
     async def get_warnings(self, user_id: int) -> int:
         if not self.conn: return 0

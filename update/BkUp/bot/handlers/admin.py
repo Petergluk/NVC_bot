@@ -1,12 +1,16 @@
 # NVC_bot/bot/handlers/admin.py
-# version: 3.1.1
-# 2025-07-28T20:00:00Z
+# version: 3.4.0
+# 2025-08-13T13:30:00Z
 """
 Обработчики команд, доступных только администраторам.
 
-Version 3.1.1:
-- FIX: Тексты команд `/warnings` и `/stats` переведены на `ParseMode.MARKDOWN_V2`
-       и корректно экранированы для предотвращения ошибок парсинга.
+Version 3.4.0:
+- FIX: Исправлен валидатор для "Промпта Судьи" (`moderation_prompt`),
+       который ошибочно требовал переменную `{text}`, что не соответствует
+       текущей архитектуре. Теперь используется общий валидатор.
+
+Version 3.3.0:
+- REFACTOR: Полностью переработана логика команды /warnings.
 """
 import asyncio
 import logging
@@ -20,6 +24,7 @@ from telegram.error import TelegramError, BadRequest
 from ..utils.decorators import admin_only, log_action
 from ..utils.validators import validate_prompt, validate_moderation_template
 from ..utils.formatters import escape_markdown_v2, format_stats_text
+from ..utils.context_helpers import clear_conversation_user_data
 from ..database import Database
 from ..services.gemini import GeminiService
 from .callbacks import CallbackHandlers
@@ -66,7 +71,7 @@ class AdminHandlers:
 
         if not all([prompt_type, new_text, original_update]):
             logger.error("Недостаточно данных для сохранения промпта.", extra={'trace_id': trace_id})
-            context.user_data.clear()
+            clear_conversation_user_data(context)
             return
 
         original_query = original_update.callback_query
@@ -74,7 +79,8 @@ class AdminHandlers:
         
         save_actions = {
             "facilitator_prompt": (validate_prompt, self.db.set_prompt),
-            "moderation_prompt": (lambda p: None if "{text}" in p else "Промпт должен содержать `{text}`.", self.db.set_moderation_prompt),
+            # FIX: Валидатор для промпта судьи больше не должен требовать `{text}`.
+            "moderation_prompt": (validate_prompt, self.db.set_moderation_prompt),
             "moderation_template": (validate_moderation_template, self.db.set_moderation_task_template),
             "welcome_prompt": (lambda p: None if "{user_mention}" in p else "Промпт должен содержать `{user_mention}`.", self.db.set_welcome_prompt)
         }
@@ -91,7 +97,7 @@ class AdminHandlers:
         else:
             await context.bot.send_message(chat_id=original_query.message.chat_id, text=f"❌ Ошибка валидации: {escape_markdown_v2(error_message)}", parse_mode=ParseMode.MARKDOWN_V2)
         
-        context.user_data.clear()
+        clear_conversation_user_data(context)
         
         menu_update_map = {
             "facilitator_prompt": self.callback_handlers.show_facilitator_prompt_menu,
@@ -134,7 +140,7 @@ class AdminHandlers:
                 if original_update.callback_query:
                     await original_update.callback_query.delete_message()
 
-        context.user_data.clear()
+        clear_conversation_user_data(context)
         return ConversationHandler.END
 
     @admin_only
@@ -147,27 +153,43 @@ class AdminHandlers:
     @admin_only
     @log_action("warnings")
     async def manage_warnings(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """REFACTOR: Управляет предупреждениями пользователей. Логика полностью переработана."""
         args, message, trace_id = context.args, update.message, str(uuid.uuid4())
-        target_id, amount_str = None, None
-        
+        target_id, amount = None, None
+
+        # Сценарий 1: Команда является ответом на сообщение
         if message.reply_to_message:
             target_id = message.reply_to_message.from_user.id
-            if args: amount_str = args[0]
-        elif len(args) >= 1:
+            if args:
+                try: amount = int(args[0])
+                except (ValueError, IndexError):
+                    await message.reply_text("❌ Неверный формат количества. Укажите число, например: `+1` или `-1`\\.", parse_mode=ParseMode.MARKDOWN_V2)
+                    return
+        # Сценарий 2: Команда содержит аргументы (@username)
+        elif args and len(args) >= 1 and args[0].startswith('@'):
             target_id_str = args[0]
-            if len(args) > 1 and re.match(r"^[+-]?\d+$", args[1]): amount_str = args[1]
             try:
-                if target_id_str.isdigit(): target_id = int(target_id_str)
-                elif target_id_str.startswith('@'): target_id = (await context.bot.get_chat(chat_id=target_id_str)).id
-                else: raise ValueError("Неверный формат")
+                target_id = (await context.bot.get_chat(chat_id=target_id_str)).id
             except (TelegramError, ValueError):
-                await message.reply_text(f"❌ Не удалось найти пользователя `{escape_markdown_v2(target_id_str)}`\\.", parse_mode=ParseMode.MARKDOWN_V2)
+                await message.reply_text(f"❌ Не удалось найти пользователя `{escape_markdown_v2(target_id_str)}`\\. Убедитесь, что @username верен\\.", parse_mode=ParseMode.MARKDOWN_V2)
                 return
-        
-        if not target_id:
-            await message.reply_text("*Как использовать:* `/warnings <user_id/@username> [+/-N]` или ответом на сообщение\\.", parse_mode=ParseMode.MARKDOWN_V2)
+            
+            if len(args) > 1:
+                try: amount = int(args[1])
+                except ValueError:
+                    await message.reply_text("❌ Неверный формат количества. Укажите число, например: `+1` или `-1`\\.", parse_mode=ParseMode.MARKDOWN_V2)
+                    return
+        # Сценарий 3: Недостаточно данных
+        else:
+            await message.reply_text(
+                "**Как использовать:**\n"
+                "• Ответьте на сообщение пользователя командой `/warnings [+/-N]`\n"
+                "• Или используйте `/warnings @username [+/-N]`",
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
             return
 
+        # Получение информации о пользователе для ответа
         try:
             user_info = await context.bot.get_chat(target_id)
             user_mention = escape_markdown_v2(f"@{user_info.username}" if user_info.username else user_info.full_name)
@@ -175,12 +197,10 @@ class AdminHandlers:
             logger.warning("Не удалось получить инфо о пользователе %d: %s", target_id, e, extra={'trace_id': trace_id})
             user_mention = f"пользователь с ID `{target_id}`"
 
-        if amount_str:
-            if not re.match(r"^[+-]?\d+$", amount_str):
-                await message.reply_text("❌ Неверный формат количества: `+1`, `\\-1`\\.", parse_mode=ParseMode.MARKDOWN_V2)
-                return
-            new_count = await self.db.adjust_warnings(target_id, int(amount_str))
-            await message.reply_text(f"✅ Варны для {user_mention} изменены\\. Теперь: *{new_count}*\\.", parse_mode=ParseMode.MARKDOWN_V2)
+        # Применение изменений или отображение информации
+        if amount is not None:
+            new_count = await self.db.adjust_warnings(target_id, amount)
+            await message.reply_text(f"✅ Предупреждения для {user_mention} изменены\\. Теперь: *{new_count}*\\.", parse_mode=ParseMode.MARKDOWN_V2)
         else:
             count = await self.db.get_warnings(target_id)
             await message.reply_text(f"ℹ️ У {user_mention} *{count}* варн\\(ов\\)\\.", parse_mode=ParseMode.MARKDOWN_V2)

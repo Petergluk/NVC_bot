@@ -1,12 +1,11 @@
 # NVC_bot/bot/handlers/callbacks/callback_patterns.py
-# version: 1.1.0
-# 2025-07-28T18:00:00Z
+# version: 1.2.0
+# 2025-08-07T16:00:00Z
 """
 Централизованное хранилище для всех строк `callback_data`.
 
-Этот модуль устраняет "магические строки" из кода, предоставляя
-константы для всех идентификаторов, используемых в Inline-кнопках.
-Это повышает надежность и упрощает поддержку.
+Version 1.2.0:
+- ADD: Добавлены префиксы для управления настройками безопасности.
 
 Version 1.1.0:
 - ADD: Добавлены префиксы для управления настройками контекста.
@@ -31,6 +30,10 @@ class CallbackPrefix:
     GENERATION_SETTINGS = "generation_settings"
     GEN_CONFIG_EDIT = "gen_config_edit_"
     GEN_CONFIG_RESET = "gen_config_reset"
+    
+    # --- Подменю Настроек Безопасности ---
+    SAFETY_SETTINGS = "safety_settings"
+    SAFETY_SET_LEVEL = "safety_set_level_"
 
     # --- Подменю Настроек Контекста ---
     CONTEXT_SETTINGS = "context_settings"

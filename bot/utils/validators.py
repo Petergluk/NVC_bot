@@ -1,8 +1,16 @@
 # NVC_bot/bot/utils/validators.py
-# version: 1.2.0
-# 2025-07-26T10:00:00Z
+# version: 1.5.0
+# 2025-08-13T14:00:00Z
 """
 Функции-валидаторы для различных частей проекта.
+
+Version 1.5.0:
+- FEATURE: В `validate_moderation_template` добавлена проверка на
+           переменную `{moderation_rules}`.
+
+Version 1.4.0:
+- FIX: В `validate_moderation_template` проверка `{rules_list}` заменена
+       на `{group_rules}` для соответствия актуальным шаблонам.
 """
 import re
 from typing import Optional, List
@@ -31,18 +39,15 @@ def validate_moderation_template(template: str) -> Optional[str]:
     Returns:
         Optional[str]: Текст ошибки, если валидация не пройдена, иначе None.
     """
-    # ИСПРАВЛЕНИЕ: Добавлена проверка на {user_mention}
     required_vars = [
         "{user_mention}",
         "{violator_message}",
         "{warnings_count}",
-        "{rules_list}",
-        "{chat_history}"
+        "{chat_history}",
+        "{group_rules}",
+        "{moderation_rules}" # Добавлена новая переменная
     ]
     missing_vars = [var for var in required_vars if var not in template]
     if missing_vars:
         return f"Шаблон должен содержать следующие переменные: {', '.join(missing_vars)}"
     return None
-
-# ИСПРАВЛЕНИЕ: Функция extract_bot_mention удалена, так как ее логика
-# была упрощена и перенесена непосредственно в обработчик handle_message.

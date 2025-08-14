@@ -1,12 +1,11 @@
 # NVC_bot/bot/handlers/states.py
-# version: 1.1.0
-# 2025-07-28T18:00:00Z
+# version: 1.2.0
+# 2025-08-07T16:00:00Z
 """
 Централизованное хранилище констант состояний для ConversationHandler.
 
-Этот модуль определяет все состояния диалога как целые числа.
-Он не имеет внутренних зависимостей от других модулей проекта,
-чтобы предотвратить циклические импорты.
+Version 1.2.0:
+- ADD: Добавлено состояние для управления настройками безопасности.
 
 Version 1.1.0:
 - ADD: Добавлены состояния для управления настройками контекста.
@@ -23,7 +22,8 @@ Version 1.1.0:
     WELCOME_MODEL_MENU,
     WELCOME_PROMPT_MENU,
     GENERATION_SETTINGS,
-    CONTEXT_SETTINGS,           # NEW
+    CONTEXT_SETTINGS,
+    SAFETY_SETTINGS_MENU,       # NEW
 
     # Подменю настроек Модерации
     MODERATION_PROMPT_MENU,
@@ -37,10 +37,10 @@ Version 1.1.0:
     # Состояния ожидания ввода от пользователя
     AWAIT_PROMPT_INPUT,
     AWAIT_GENERATION_VALUE,
-    AWAIT_CONTEXT_VALUE,        # NEW
+    AWAIT_CONTEXT_VALUE,
     AWAIT_SANCTION_VALUE,
     AWAIT_TRIGGERS_TO_ADD,
     AWAIT_TRIGGERS_TO_DELETE,
     AWAIT_EXCEPTIONS_TO_ADD,
     AWAIT_EXCEPTIONS_TO_DELETE,
-) = range(23)
+) = range(24)
