@@ -1,21 +1,22 @@
 # NVC_bot/pyproject.toml
-# version: 2.0.0
-# 2026-10-30T06:30:00Z
+# version: 3.0.0
+# 2026-10-30T16:30:00Z
 #
-# Version 2.0.0:
-# - UPGRADE: Добавлен современный SDK `google-genai` (с сохранением обратной совместимости).
-# - FIX: В dev-зависимости добавлен `pytest-asyncio` для корректного прогона асинхронных тестов.
+# Version 3.0.0:
+# - UPGRADE: Поддержка актуальной линейки моделей Gemini 3.8 / 3.6 / 3.5 / 3.1 / 3.0 / 2.5 и Gemma 4.
+# - ADD: Structured Outputs (Pydantic) для ИИ-судьи модерации и универсального ННО-переводчика.
 
 [tool.poetry]
 name = "weidehanbot"
-version = "2.0.0"
-description = "Telegram-бот для осознанной коммуникации (ННО / NVC)"
+version = "3.0.0"
+description = "Telegram-бот для осознанной коммуникации и ненасильственного общения (ННО / NVC)"
 authors = ["WeiDeHan Team"]
 package-mode = false
 
 [tool.poetry.dependencies]
 python = ">=3.10,<3.14"
 python-dotenv = "^1.0"
+pydantic = "^2.6"
 pydantic-settings = "^2.1"
 python-telegram-bot = "^21.0"
 aiosqlite = "^0.20"
@@ -30,22 +31,11 @@ mypy = "^1.10"
 pytest = "^8.2"
 pytest-asyncio = "^0.23"
 
-[tool.black]
-line-length = 100
-
-[tool.isort]
-profile = "black"
-
-[tool.mypy]
-strict = true
-plugins = ["pydantic.mypy"]
-
-[tool.pytest.ini_options]
-asyncio_mode = "auto"
-filterwarnings = [
-    "ignore::DeprecationWarning:google._upb._message",
-]
-
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+asyncio_mode = "auto"

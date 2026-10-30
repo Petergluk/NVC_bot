@@ -32,7 +32,7 @@ class PromptCallbackHandler:
     async def _get_prompt_data(self, text_type: str) -> tuple:
         if text_type == "facilitator_prompt":
             content = await self.db.get_prompt()
-            title = r"📜 *Промпт ИИ\-Фасилитатора*"
+            title = "📜 *Промпт ИИ\-Фасилитатора*"
             back_cb = CallbackPrefix.BACK_TO_FACILITATOR_SETTINGS
             ret_state = FACILITATOR_PROMPT_MENU
             edit_cb = CallbackPrefix.EDIT_FACILITATOR_PROMPT
@@ -142,31 +142,31 @@ class PromptCallbackHandler:
         if cb_data == CallbackPrefix.EDIT_FACILITATOR_PROMPT:
             prompt_type = "facilitator_prompt"
             prompt_text = (
-                r"Отправьте новый текст для *Промпта ИИ\-Фасилитатора \(Ядра Личности\)*\." "\n\n"
+                "Отправьте новый текст для *Промпта ИИ\-Фасилитатора \(Ядра Личности\)*\.\n\n"
                 "*Доступные переменные:* `{group_rules}`\n\n"
-                r"Для отмены введите /cancel\."
+                "Для отмены введите /cancel\."
             )
         elif cb_data == CallbackPrefix.EDIT_MODERATION_PROMPT:
             prompt_type = "moderation_prompt"
             prompt_text = (
-                r"Отправьте новый текст для *Промпта Судьи*\." "\n\n"
+                "Отправьте новый текст для *Промпта Судьи*\.\n\n"
                 "*Обязательная переменная:* `{text}`\n\n"
-                r"Для отмены введите /cancel\."
+                "Для отмены введите /cancel\."
             )
         elif cb_data == CallbackPrefix.EDIT_MODERATION_TEMPLATE:
             prompt_type = "moderation_template"
             prompt_text = (
-                r"Отправьте новый текст для *Промпта Сообщения о Санкции*\." "\n\n"
+                "Отправьте новый текст для *Промпта Сообщения о Санкции*\.\n\n"
                 "*Обязательные переменные:* `{user_mention}`, `{violator_message}`, `{warnings_count}`, `{rules_list}`, `{chat_history}`\n"
                 "*Дополнительные переменные:* `{group_rules}`\n\n"
-                r"Для отмены введите /cancel\."
+                "Для отмены введите /cancel\."
             )
         elif cb_data == CallbackPrefix.EDIT_WELCOME_PROMPT:
             prompt_type = "welcome_prompt"
             prompt_text = (
-                r"Отправьте новый текст для *Промпта Приветствия*\." "\n\n"
+                "Отправьте новый текст для *Промпта Приветствия*\.\n\n"
                 "*Обязательная переменная:* `{user_mention}`\n\n"
-                r"Для отмены введите /cancel\."
+                "Для отмены введите /cancel\."
             )
         else:
             return ConversationHandler.END
@@ -198,3 +198,7 @@ class PromptCallbackHandler:
             return await self.show_welcome_prompt_menu(update, context)
 
         return ConversationHandler.END
+
+    # Aliases for compatibility
+    send_full_prompt_handler = send_full_prompt
+    request_new_prompt = request_prompt_input

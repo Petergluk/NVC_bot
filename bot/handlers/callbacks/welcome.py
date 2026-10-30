@@ -34,7 +34,7 @@ class WelcomeCallbackHandler:
             [InlineKeyboardButton("📜 Промпт", callback_data=CallbackPrefix.WELCOMES_PROMPT)],
             [InlineKeyboardButton("⬅️ Назад", callback_data=CallbackPrefix.BACK_TO_FACILITATOR_SETTINGS)]
         ]
-        text = r"👋 *Настройки приветствий*" "\n\n" r"Здесь настраивается автоматическое приветствие новых участников чата\."
+        text = "👋 *Настройки приветствий*\n\nЗдесь настраивается автоматическое приветствие новых участников чата\."
         reply_markup = InlineKeyboardMarkup(kb)
 
         await self._safe_edit_message(query, text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
@@ -51,7 +51,7 @@ class WelcomeCallbackHandler:
         await self._safe_answer_query(query)
 
         current_model = await self.db.get_welcome_model()
-        text = fr"🤖 *Выбор AI\-модели для приветствий*" "\n\n" fr"Текущая модель: *{escape_markdown_v2(current_model)}*"
+        text = f"🤖 *Выбор AI\-модели для приветствий*\n\nТекущая модель: *{escape_markdown_v2(current_model)}*"
 
         kb = [
             [InlineKeyboardButton(("✅ " if name == current_model else "") + name, callback_data=f"{CallbackPrefix.WELCOMES_SET_MODEL}{name}")]

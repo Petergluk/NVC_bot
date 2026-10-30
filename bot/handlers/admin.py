@@ -115,7 +115,7 @@ class AdminHandlers:
         if error_message:
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=fr"❌ Ошибка валидации: {escape_markdown_v2(error_message)}" "\n" r"Попробуйте отправить исправленный текст или введите /cancel\.",
+                text=f"❌ Ошибка валидации: {escape_markdown_v2(error_message)}\nПопробуйте отправить исправленный текст или введите /cancel\.",
                 parse_mode=ParseMode.MARKDOWN_V2
             )
             return AWAIT_PROMPT_INPUT
@@ -131,7 +131,7 @@ class AdminHandlers:
 
         await context.bot.send_message(
             chat_id=chat_id,
-            text=fr"✅ Промпт успешно обновлен\. Длина: `{len(new_text)}` симв\.",
+            text=f"✅ Промпт успешно обновлен\. Длина: `{len(new_text)}` симв\.",
             parse_mode=ParseMode.MARKDOWN_V2
         )
 
@@ -195,14 +195,14 @@ class AdminHandlers:
                     raise ValueError("Неверный формат")
             except (TelegramError, ValueError):
                 await message.reply_text(
-                    fr"❌ Не удалось найти пользователя `{escape_markdown_v2(target_id_str)}`\.",
+                    f"❌ Не удалось найти пользователя `{escape_markdown_v2(target_id_str)}`\.",
                     parse_mode=ParseMode.MARKDOWN_V2
                 )
                 return
 
         if not target_id:
             await message.reply_text(
-                r"*Как использовать:* `/warnings <user_id/@username> [+/-N]` или ответом на сообщение\.",
+                "*Как использовать:* `/warnings <user_id/@username> [+/-N]` или ответом на сообщение\.",
                 parse_mode=ParseMode.MARKDOWN_V2
             )
             return
@@ -216,16 +216,16 @@ class AdminHandlers:
 
         if amount_str:
             if not re.match(r"^[+-]?\d+$", amount_str):
-                await message.reply_text(r"❌ Неверный формат количества: `+1`, `\-1`\.", parse_mode=ParseMode.MARKDOWN_V2)
+                await message.reply_text("❌ Неверный формат количества: `+1`, `\-1`\.", parse_mode=ParseMode.MARKDOWN_V2)
                 return
             new_count = await self.db.adjust_warnings(target_id, int(amount_str))
             await message.reply_text(
-                fr"✅ Варны для {user_mention} изменены\. Теперь: *{new_count}*\.",
+                f"✅ Варны для {user_mention} изменены\. Теперь: *{new_count}*\.",
                 parse_mode=ParseMode.MARKDOWN_V2
             )
         else:
             count = await self.db.get_warnings(target_id)
             await message.reply_text(
-                fr"ℹ️ У {user_mention} *{count}* варн\(ов\)\.",
+                f"ℹ️ У {user_mention} *{count}* варн\(ов\)\.",
                 parse_mode=ParseMode.MARKDOWN_V2
             )

@@ -40,15 +40,15 @@ class ContextCallbackHandler:
 
         text_lines = [
             "📚 *Настройки Контекста*\n",
-            r"Здесь настраивается, сколько последних сообщений бот 'помнит' при ответе или модерации\.",
-            r"• *Контекст диалога:* Глубина памяти для обычных ответов\.",
-            r"• *Контекст для Судьи:* Глубина памяти для анализа нарушений\." "\n"
+            "Здесь настраивается, сколько последних сообщений бот 'помнит' при ответе или модерации\.",
+            "• *Контекст диалога:* Глубина памяти для обычных ответов\.",
+            "• *Контекст для Судьи:* Глубина памяти для анализа нарушений\.\n"
         ]
 
         buttons = []
         for key, meta in self.CONTEXT_PARAM_META.items():
             value = config.get(key)
-            text_lines.append(fr"*{escape_markdown_v2(meta['name'])}*: `{value}` сообщ\.")
+            text_lines.append(f"*{escape_markdown_v2(meta['name'])}*: `{value}` сообщ\.")
             buttons.append(InlineKeyboardButton(f"{meta['name']}", callback_data=f"{CallbackPrefix.CONTEXT_CONFIG_EDIT}{key}"))
 
         kb = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
@@ -80,11 +80,11 @@ class ContextCallbackHandler:
         min_val, max_val = meta["range"]
 
         text = (
-            fr"✏️ *Изменение параметра: {escape_markdown_v2(meta['name'])}*" "\n\n"
-            r"Этот параметр определяет максимальное количество последних сообщений из истории чата, которое будет использоваться\." "\n\n"
-            rf"*Текущее значение: `{current_value}`*" "\n"
-            rf"Введите целое число от `{min_val}` до `{max_val}`\." "\n\n"
-            r"*Отправьте новое значение или /cancel для отмены\.*"
+            f"✏️ *Изменение параметра: {escape_markdown_v2(meta['name'])}*\n\n"
+            f"Этот параметр определяет максимальное количество последних сообщений из истории чата, которое будет использоваться\.\n\n"
+            f"*Текущее значение: `{current_value}`*\n"
+            f"Введите целое число от `{min_val}` до `{max_val}`\.\n\n"
+            "*Отправьте новое значение или /cancel для отмены\.*"
         )
 
         await self._safe_edit_message(query, text, reply_markup=None, parse_mode=ParseMode.MARKDOWN_V2)
@@ -96,7 +96,7 @@ class ContextCallbackHandler:
         param_key = context.user_data.get("context_param_key")
 
         if not param_key or param_key not in self.CONTEXT_PARAM_META:
-            await msg.reply_text(r"❌ Внутренняя ошибка: не удалось определить параметр для изменения\.", parse_mode=ParseMode.MARKDOWN_V2)
+            await msg.reply_text("❌ Внутренняя ошибка: не удалось определить параметр для изменения\.", parse_mode=ParseMode.MARKDOWN_V2)
             clear_conversation_user_data(context)
             return FACILITATOR_SETTINGS
 
@@ -116,10 +116,10 @@ class ContextCallbackHandler:
             original_update = context.user_data.get("original_update")
             if original_update and original_update.callback_query:
                 error_text = (
-                    fr"❌ *Неверное значение для {escape_markdown_v2(meta['name'])}*" "\n\n"
-                    fr"Пожалуйста, введите *целое число* от `{meta['range'][0]}` до `{meta['range'][1]}`\." "\n"
-                    fr"Ошибка: {escape_markdown_v2(str(e))}" "\n\n"
-                    r"*Попробуйте снова или нажмите /cancel\.*"
+                    f"❌ *Неверное значение для {escape_markdown_v2(meta['name'])}*\n\n"
+                    f"Пожалуйста, введите *целое число* от `{meta['range'][0]}` до `{meta['range'][1]}`\.\n"
+                    f"Ошибка: {escape_markdown_v2(str(e))}\n\n"
+                    f"*Попробуйте снова или нажмите /cancel\.*"
                 )
                 await self._safe_edit_message(original_update.callback_query, error_text, parse_mode=ParseMode.MARKDOWN_V2)
             return AWAIT_CONTEXT_VALUE

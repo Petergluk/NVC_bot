@@ -1,11 +1,11 @@
 # NVC_bot/requirements.txt
-# pip install -r requirements.txt
+# version: 3.0.0
+# 2026-10-30T16:30:00Z
 
-python-telegram-bot==21.0.1
+aiosqlite>=0.20.0,<1.0.0
 google-genai>=1.0.0
-google-generativeai==0.8.5
-python-dotenv==1.0.0
-pydantic-settings>=2.1.0
-aiosqlite>=0.20.0
-pytest>=8.2.0
-pytest-asyncio>=0.23.0
+google-generativeai>=0.8.5,<0.9.0
+pydantic>=2.6.0,<3.0.0
+pydantic-settings>=2.1.0,<3.0.0
+python-dotenv>=1.0.0,<2.0.0
+python-telegram-bot>=21.0,<22.0

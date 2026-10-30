@@ -39,7 +39,7 @@ class GenerationCallbackHandler:
 
         config = await self.db.get_generation_config()
 
-        text_lines = [r"⚙️ *Параметры генерации AI*" "\n\n" r"Здесь можно тонко настроить поведение ИИ\-ассистента\." "\n"]
+        text_lines = ["⚙️ *Параметры генерации AI*\n\nЗдесь можно тонко настроить поведение ИИ\-ассистента\.\n"]
 
         buttons = []
         for key, meta in self.GENERATION_PARAM_META.items():
@@ -74,39 +74,39 @@ class GenerationCallbackHandler:
 
         help_texts = {
             "temperature": (
-                r"✏️ *Изменение параметра: Temperature*" "\n\n"
-                r"Этот параметр — *«термометр креативности»* бота\. Он контролирует, насколько случайными и творческими будут его ответы\." "\n\n"
-                r"• *Низкие значения* \(`0.0` \- `0.4`\): Бот будет очень точным и последовательным\." "\n"
-                r"• *Средние значения* \(`0.5` \- `0.8`\): Сбалансированный режим \(Рекомендуется\)\." "\n"
-                r"• *Высокие значения* \(`0.9` и выше\): Высокая креативность\." "\n\n"
-                rf"*Текущее значение: `{current_value}`*" "\n"
-                r"*Введите число от `0.0` до `2.0`\.*" "\n\n"
-                r"*Отправьте новое значение или /cancel для отмены\.*"
+                f"✏️ *Изменение параметра: Temperature*\n\n"
+                f"Этот параметр — *«термометр креативности»* бота\. Он контролирует, насколько случайными и творческими будут его ответы\.\n\n"
+                f"• *Низкие значения* \(`0.0` \- `0.4`\): Бот будет очень точным и последовательным\.\n"
+                f"• *Средние значения* \(`0.5` \- `0.8`\): Сбалансированный режим \(Рекомендуется\)\.\n"
+                f"• *Высокие значения* \(`0.9` и выше\): Высокая креативность\.\n\n"
+                f"*Текущее значение: `{current_value}`*\n"
+                f"*Введите число от `0.0` до `2.0`*\.\n\n"
+                "*Отправьте новое значение или /cancel для отмены\.*"
             ),
             "top_p": (
-                r"✏️ *Изменение параметра: Top P*" "\n\n"
-                r"Этот параметр — *«фильтр адекватности»*\. Он отсекает маловероятные слова при генерации ответа\." "\n\n"
-                rf"*Текущее значение: `{current_value}`*" "\n"
-                r"*Введите число от `0.0` до `1.0`\.*" "\n\n"
-                r"*Отправьте новое значение или /cancel для отмены\.*"
+                f"✏️ *Изменение параметра: Top P*\n\n"
+                f"Этот параметр — *«фильтр адекватности»*\. Он отсекает маловероятные слова при генерации ответа\.\n\n"
+                f"*Текущее значение: `{current_value}`*\n"
+                f"*Введите число от `0.0` до `1.0`*\.\n\n"
+                "*Отправьте новое значение или /cancel для отмены\.*"
             ),
             "top_k": (
-                r"✏️ *Изменение параметра: Top K*" "\n\n"
-                r"Ограничивает выбор следующего слова `K` самыми вероятными кандидатами\." "\n\n"
-                rf"*Текущее значение: `{current_value}`*" "\n"
-                r"*Введите целое число от `1` до `8192`\.*" "\n\n"
-                r"*Отправьте новое значение или /cancel для отмены\.*"
+                f"✏️ *Изменение параметра: Top K*\n\n"
+                f"Ограничивает выбор следующего слова `K` самыми вероятными кандидатами\.\n\n"
+                f"*Текущее значение: `{current_value}`*\n"
+                f"*Введите целое число от `1` до `8192`*\.\n\n"
+                "*Отправьте новое значение или /cancel для отмены\.*"
             ),
             "max_output_tokens": (
-                r"✏️ *Изменение параметра: Max Tokens*" "\n\n"
-                r"Ограничитель максимальной длины ответа бота в токенах\." "\n\n"
-                rf"*Текущее значение: `{current_value}`*" "\n"
-                r"*Введите целое число от `1` до `8192`\.*" "\n\n"
-                r"*Отправьте новое значение или /cancel для отмены\.*"
+                f"✏️ *Изменение параметра: Max Tokens*\n\n"
+                f"Ограничитель максимальной длины ответа бота в токенах\.\n\n"
+                f"*Текущее значение: `{current_value}`*\n"
+                f"*Введите целое число от `1` до `8192`*\.\n\n"
+                "*Отправьте новое значение или /cancel для отмены\.*"
             )
         }
 
-        text = help_texts.get(param_key, r"Ошибка: описание для этого параметра не найдено\.")
+        text = help_texts.get(param_key, "Ошибка: описание для этого параметра не найдено\.")
         await self._safe_edit_message(query, text, reply_markup=None, parse_mode=ParseMode.MARKDOWN_V2)
         return AWAIT_GENERATION_VALUE
 
@@ -115,7 +115,7 @@ class GenerationCallbackHandler:
         param_key = context.user_data.get("gen_param_key")
 
         if not param_key or param_key not in self.GENERATION_PARAM_META:
-            await msg.reply_text(r"❌ Внутренняя ошибка: не удалось определить параметр для изменения\.", parse_mode=ParseMode.MARKDOWN_V2)
+            await msg.reply_text("❌ Внутренняя ошибка: не удалось определить параметр для изменения\.", parse_mode=ParseMode.MARKDOWN_V2)
             clear_conversation_user_data(context)
             return FACILITATOR_SETTINGS
 
@@ -138,10 +138,10 @@ class GenerationCallbackHandler:
             if original_update and original_update.callback_query:
                 num_type_label = "целое число" if meta["type"] is int else "число"
                 error_text = (
-                    fr"❌ *Неверное значение для {escape_markdown_v2(meta['name'])}*" "\n\n"
-                    fr"Пожалуйста, введите *{num_type_label}* от `{meta['range'][0]}` до `{meta['range'][1]}`\." "\n"
-                    fr"Ошибка: {escape_markdown_v2(str(e))}" "\n\n"
-                    r"*Попробуйте снова или нажмите /cancel\.*"
+                    f"❌ *Неверное значение для {escape_markdown_v2(meta['name'])}*\n\n"
+                    f"Пожалуйста, введите *{num_type_label}* от `{meta['range'][0]}` до `{meta['range'][1]}`\.\n"
+                    f"Ошибка: {escape_markdown_v2(str(e))}\n\n"
+                    f"*Попробуйте снова или нажмите /cancel\.*"
                 )
                 await self._safe_edit_message(original_update.callback_query, error_text, parse_mode=ParseMode.MARKDOWN_V2)
             return AWAIT_GENERATION_VALUE

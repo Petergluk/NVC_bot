@@ -1,23 +1,24 @@
 # NVC_bot/bot/database.py
-# version: 2.2.0
-# 2026-10-30T06:30:00Z
-"""
+# version: 3.0.0
+# 2026-10-30T16:30:00Z
+
+'''
 Модуль для асинхронной работы с базой данных SQLite.
 
-Version 2.2.0:
-- FIX: В `get_chat_history` возвращено имя автора (`user_name: text`) для
-       пользовательских сообщений, чтобы ИИ различал собеседников в групповом чате.
-- ADD: Добавлены методы `get_facilitator_model` и `set_facilitator_model` для
-       сохранения выбранной модели Фасилитатора между перезапусками бота.
-- ADD: Добавлен метод `close()` для корректного закрытия соединения при завершении работы.
-"""
+Version 3.0.0:
+- ADD: Поддержка мягкого режима пре-модерации (`is_soft_moderation_enabled`, `toggle_soft_moderation`).
+- ADD: Система апелляций (`appeals` таблица: `create_appeal`, `get_appeal`, `update_appeal_status`).
+- ADD: Автоамнистия предупреждений (`last_warning_at` в `user_warnings`, `is_auto_amnesty_enabled`,
+       `get_auto_amnesty_days`, `apply_auto_amnesty`).
+- ADD: Настройка проактивного фасилитатора споров (`is_proactive_facilitator_enabled`).
+'''
+
 import logging
 import json
 from typing import Any, Dict, List, Optional, Type, TypeVar
 from collections import defaultdict
 
 import aiosqlite
-
 from .config import DATA_DIR, settings
 
 logger = logging.getLogger(__name__)
@@ -25,10 +26,9 @@ T = TypeVar('T')
 
 
 class Database:
-    """
+    '''
     Класс для управления базой данных SQLite.
-    """
-
+    '''
     def __init__(self):
         self.db_path = DATA_DIR / "bot_database.sqlite3"
         self.conn: Optional[aiosqlite.Connection] = None
@@ -48,7 +48,7 @@ class Database:
             raise
 
     async def close(self):
-        """Корректно закрывает соединение с базой данных."""
+        '''Корректно закрывает соединение с базой данных.'''
         if self.conn:
             await self.conn.close()
             self.conn = None
@@ -70,10 +70,28 @@ class Database:
             )
             await cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_chat_time ON messages(chat_id, timestamp DESC)")
             await cursor.execute("CREATE TABLE IF NOT EXISTS statistics (key TEXT PRIMARY KEY, value INTEGER NOT NULL)")
-            await cursor.execute("CREATE TABLE IF NOT EXISTS user_warnings (user_id INTEGER PRIMARY KEY, count INTEGER NOT NULL DEFAULT 0)")
+            await cursor.execute(
+                "CREATE TABLE IF NOT EXISTS user_warnings ("
+                "user_id INTEGER PRIMARY KEY, "
+                "count INTEGER NOT NULL DEFAULT 0, "
+                "last_warning_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
+            )
+            await cursor.execute(
+                "CREATE TABLE IF NOT EXISTS appeals ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "chat_id INTEGER NOT NULL, "
+                "user_id INTEGER NOT NULL, "
+                "user_name TEXT NOT NULL, "
+                "original_text TEXT NOT NULL, "
+                "suggested_nvc TEXT NOT NULL DEFAULT '', "
+                "rule_violated TEXT NOT NULL DEFAULT '', "
+                "status TEXT NOT NULL DEFAULT 'pending', "
+                "created_at DATETIME DEFAULT CURRENT_TIMESTAMP)"
+            )
             await cursor.execute("CREATE TABLE IF NOT EXISTS moderation_triggers (id INTEGER PRIMARY KEY AUTOINCREMENT, trigger_word TEXT NOT NULL UNIQUE, category TEXT NOT NULL DEFAULT 'general')")
             await cursor.execute("CREATE TABLE IF NOT EXISTS moderation_exceptions (id INTEGER PRIMARY KEY AUTOINCREMENT, exception_phrase TEXT NOT NULL UNIQUE, category TEXT NOT NULL DEFAULT 'general')")
 
+            # Миграции для существующих БД
             await cursor.execute("PRAGMA table_info(moderation_triggers)")
             if 'category' not in [row['name'] for row in await cursor.fetchall()]:
                 await cursor.execute("ALTER TABLE moderation_triggers ADD COLUMN category TEXT NOT NULL DEFAULT 'general'")
@@ -81,6 +99,11 @@ class Database:
             await cursor.execute("PRAGMA table_info(moderation_exceptions)")
             if 'category' not in [row['name'] for row in await cursor.fetchall()]:
                 await cursor.execute("ALTER TABLE moderation_exceptions ADD COLUMN category TEXT NOT NULL DEFAULT 'general'")
+
+            await cursor.execute("PRAGMA table_info(user_warnings)")
+            if 'last_warning_at' not in [row['name'] for row in await cursor.fetchall()]:
+                await cursor.execute("ALTER TABLE user_warnings ADD COLUMN last_warning_at DATETIME DEFAULT CURRENT_TIMESTAMP")
+
         await self.conn.commit()
 
     async def populate_defaults(self):
@@ -121,12 +144,11 @@ class Database:
         if not self.conn:
             return False
         try:
-            cursor = await self.conn.execute(
-                "INSERT OR IGNORE INTO moderation_triggers (trigger_word, category) VALUES (?, ?)",
-                (trigger.lower(), category.lower())
-            )
+            await self.conn.execute("INSERT INTO moderation_triggers (trigger_word, category) VALUES (?, ?)", (trigger.lower().strip(), category))
             await self.conn.commit()
-            return cursor.rowcount > 0
+            return True
+        except aiosqlite.IntegrityError:
+            return False
         except aiosqlite.Error as e:
             logger.error("Ошибка БД при добавлении триггера '%s': %s", trigger, e)
             return False
@@ -135,10 +157,7 @@ class Database:
         if not self.conn:
             return False
         try:
-            cursor = await self.conn.execute(
-                "DELETE FROM moderation_triggers WHERE trigger_word = ?",
-                (trigger.lower(),)
-            )
+            cursor = await self.conn.execute("DELETE FROM moderation_triggers WHERE trigger_word = ?", (trigger.lower().strip(),))
             await self.conn.commit()
             return cursor.rowcount > 0
         except aiosqlite.Error as e:
@@ -151,20 +170,11 @@ class Database:
         try:
             async with self.conn.cursor() as cursor:
                 await cursor.execute("DELETE FROM moderation_triggers")
-                data_to_insert = [
-                    (word.lower(), category.lower())
-                    for category, words in settings.DEFAULT_TRIGGERS.items()
-                    for word in words
-                ]
-                await cursor.executemany(
-                    "INSERT OR IGNORE INTO moderation_triggers (trigger_word, category) VALUES (?, ?)",
-                    data_to_insert
-                )
+                to_insert = [(w.lower().strip(), cat) for cat, words in settings.DEFAULT_TRIGGERS.items() for w in words]
+                await cursor.executemany("INSERT OR IGNORE INTO moderation_triggers (trigger_word, category) VALUES (?, ?)", to_insert)
             await self.conn.commit()
-            logger.info("Таблица триггеров успешно сброшена к значениям по умолчанию.")
         except aiosqlite.Error as e:
             logger.error("Ошибка БД при сбросе триггеров: %s", e)
-            await self.conn.rollback()
 
     async def get_all_exceptions(self) -> Dict[str, List[str]]:
         if not self.conn:
@@ -188,32 +198,28 @@ class Database:
             logger.error("Ошибка БД при получении плоского списка исключений: %s", e)
             return []
 
-    async def add_exception(self, exception: str, category: str = 'general') -> bool:
+    async def add_exception(self, phrase: str, category: str = 'general') -> bool:
         if not self.conn:
             return False
         try:
-            cursor = await self.conn.execute(
-                "INSERT OR IGNORE INTO moderation_exceptions (exception_phrase, category) VALUES (?, ?)",
-                (exception.lower(), category.lower())
-            )
+            await self.conn.execute("INSERT INTO moderation_exceptions (exception_phrase, category) VALUES (?, ?)", (phrase.lower().strip(), category))
             await self.conn.commit()
-            return cursor.rowcount > 0
+            return True
+        except aiosqlite.IntegrityError:
+            return False
         except aiosqlite.Error as e:
-            logger.error("Ошибка БД при добавлении исключения '%s': %s", exception, e)
+            logger.error("Ошибка БД при добавлении исключения '%s': %s", phrase, e)
             return False
 
-    async def delete_exception(self, exception: str) -> bool:
+    async def delete_exception(self, phrase: str) -> bool:
         if not self.conn:
             return False
         try:
-            cursor = await self.conn.execute(
-                "DELETE FROM moderation_exceptions WHERE exception_phrase = ?",
-                (exception.lower(),)
-            )
+            cursor = await self.conn.execute("DELETE FROM moderation_exceptions WHERE exception_phrase = ?", (phrase.lower().strip(),))
             await self.conn.commit()
             return cursor.rowcount > 0
         except aiosqlite.Error as e:
-            logger.error("Ошибка БД при удалении исключения '%s': %s", exception, e)
+            logger.error("Ошибка БД при удалении исключения '%s': %s", phrase, e)
             return False
 
     async def reset_exceptions(self):
@@ -222,52 +228,21 @@ class Database:
         try:
             async with self.conn.cursor() as cursor:
                 await cursor.execute("DELETE FROM moderation_exceptions")
-                data_to_insert = [
-                    (phrase.lower(), category.lower())
-                    for category, phrases in settings.DEFAULT_EXCEPTIONS.items()
-                    for phrase in phrases
-                ]
-                await cursor.executemany(
-                    "INSERT OR IGNORE INTO moderation_exceptions (exception_phrase, category) VALUES (?, ?)",
-                    data_to_insert
-                )
+                to_insert = [(p.lower().strip(), cat) for cat, phrases in settings.DEFAULT_EXCEPTIONS.items() for p in phrases]
+                await cursor.executemany("INSERT OR IGNORE INTO moderation_exceptions (exception_phrase, category) VALUES (?, ?)", to_insert)
             await self.conn.commit()
-            logger.info("Таблица исключений успешно сброшена к значениям по умолчанию.")
         except aiosqlite.Error as e:
             logger.error("Ошибка БД при сбросе исключений: %s", e)
-            await self.conn.rollback()
 
-    async def get_chat_history(self, chat_id: int, limit: int) -> List[Dict[str, Any]]:
-        if not self.conn or limit <= 0:
-            return []
-        history = []
-        try:
-            query = (
-                "SELECT user_name, text, is_bot FROM ("
-                "SELECT id, user_name, text, is_bot, timestamp FROM messages "
-                "WHERE chat_id = ? ORDER BY id DESC LIMIT ?"
-                ") ORDER BY id ASC"
-            )
-            async with self.conn.execute(query, (chat_id, limit)) as cursor:
-                async for row in cursor:
-                    is_bot = bool(row["is_bot"])
-                    role = "model" if is_bot else "user"
-                    content_text = row["text"] if is_bot else f"{row['user_name']}: {row['text']}"
-                    history.append({"role": role, "parts": [{"text": content_text}]})
-            return history
-        except aiosqlite.Error as e:
-            logger.error("Ошибка БД при получении истории чата %d: %s", chat_id, e)
-            return []
-
-    async def _get_setting(self, key: str, default: T, value_type: Type[T] = str) -> T:
+    async def _get_setting(self, key: str, default: T, type_caster: Type[T] = str) -> T:
         if not self.conn:
             return default
         try:
             async with self.conn.execute("SELECT value FROM settings WHERE key = ?", (key,)) as cursor:
                 row = await cursor.fetchone()
-                return value_type(row['value']) if row else default
+                return type_caster(row['value']) if row else default
         except (aiosqlite.Error, ValueError, TypeError) as e:
-            logger.error("Ошибка БД или приведения типа для настройки '%s': %s", key, e)
+            logger.error("Ошибка получения настройки '%s': %s. Возвращено значение по умолчанию.", key, e)
             return default
 
     async def _set_setting(self, key: str, value: Any):
@@ -277,62 +252,65 @@ class Database:
             await self.conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
             await self.conn.commit()
         except aiosqlite.Error as e:
-            logger.error("Ошибка БД при установке настройки '%s': %s", key, e)
-            raise
-
-    async def _delete_setting(self, key: str):
-        if not self.conn:
-            return
-        try:
-            await self.conn.execute("DELETE FROM settings WHERE key = ?", (key,))
-            await self.conn.commit()
-        except aiosqlite.Error as e:
-            logger.error("Ошибка БД при удалении настройки '%s': %s", key, e)
+            logger.error("Ошибка БД при сохранении настройки '%s': %s", key, e)
             raise
 
     async def get_facilitator_model(self) -> str:
-        return await self._get_setting("facilitator_model", settings.DEFAULT_FACILITATOR_MODEL, str)
+        return await self._get_setting("facilitator_model", settings.GEMINI_FLASH_MODEL, str)
 
     async def set_facilitator_model(self, model_name: str):
         await self._set_setting("facilitator_model", model_name)
 
-    async def get_context_config(self) -> Dict[str, Any]:
+    async def get_chat_history(self, chat_id: int, limit: int) -> List[Dict[str, Any]]:
+        if not self.conn or limit <= 0:
+            return []
+        history = []
+        try:
+            sql = "SELECT user_name, text, is_bot FROM messages WHERE chat_id = ? ORDER BY timestamp DESC, id DESC LIMIT ?"
+            async with self.conn.execute(sql, (chat_id, limit)) as cursor:
+                rows = await cursor.fetchall()
+                for row in reversed(rows):
+                    role = "model" if row["is_bot"] else "user"
+                    text = row["text"] if row["is_bot"] else f"{row['user_name']}: {row['text']}"
+                    history.append({
+                        "role": role,
+                        "parts": [{"text": text}]
+                    })
+        except aiosqlite.Error as e:
+            logger.error("Ошибка БД при получении истории чата %d: %s", chat_id, e)
+        return history
+
+    async def get_context_config(self) -> Dict[str, int]:
+        defaults = settings.DEFAULT_CONTEXT_CONFIG
         return {
-            "context_messages_limit": await self._get_setting("ctx_msg_limit", settings.CONTEXT_MESSAGES_LIMIT, int),
-            "context_judge_limit": await self._get_setting("ctx_judge_limit", settings.CONTEXT_JUDGE_LIMIT, int),
+            "context_messages_limit": await self._get_setting("context_messages_limit", defaults["context_messages_limit"], int),
+            "context_judge_limit": await self._get_setting("context_judge_limit", defaults["context_judge_limit"], int),
         }
 
-    async def set_context_config_value(self, key: str, value: Any):
-        db_key_map = {"context_messages_limit": "ctx_msg_limit", "context_judge_limit": "ctx_judge_limit"}
-        if key in db_key_map:
-            await self._set_setting(db_key_map[key], value)
-        else:
-            logger.warning("Попытка установить неизвестный параметр контекста: %s", key)
+    async def set_context_value(self, param: str, value: int):
+        if param in settings.DEFAULT_CONTEXT_CONFIG:
+            await self._set_setting(param, value)
 
     async def reset_context_config(self):
-        for key in ["ctx_msg_limit", "ctx_judge_limit"]:
-            await self._delete_setting(key)
-        logger.info("Параметры контекста сброшены.")
+        for key, value in settings.DEFAULT_CONTEXT_CONFIG.items():
+            await self._set_setting(key, value)
 
-    async def get_generation_config(self) -> Dict[str, Any]:
+    async def get_generation_config(self) -> Dict[str, float | int]:
+        defaults = settings.DEFAULT_GENERATION_CONFIG
         return {
-            "temperature": await self._get_setting("gen_temp", settings.DEFAULT_TEMPERATURE, float),
-            "top_p": await self._get_setting("gen_top_p", settings.DEFAULT_TOP_P, float),
-            "top_k": await self._get_setting("gen_top_k", settings.DEFAULT_TOP_K, int),
-            "max_output_tokens": await self._get_setting("gen_max_tokens", settings.DEFAULT_MAX_OUTPUT_TOKENS, int),
+            "temperature": await self._get_setting("temperature", defaults["temperature"], float),
+            "top_p": await self._get_setting("top_p", defaults["top_p"], float),
+            "top_k": await self._get_setting("top_k", defaults["top_k"], int),
+            "max_output_tokens": await self._get_setting("max_output_tokens", defaults["max_output_tokens"], int),
         }
 
-    async def set_generation_config_value(self, key: str, value: Any):
-        db_key_map = {"temperature": "gen_temp", "top_p": "gen_top_p", "top_k": "gen_top_k", "max_output_tokens": "gen_max_tokens"}
-        if key in db_key_map:
-            await self._set_setting(db_key_map[key], value)
-        else:
-            logger.warning("Попытка установить неизвестный параметр генерации: %s", key)
+    async def set_generation_value(self, param: str, value: float | int):
+        if param in settings.DEFAULT_GENERATION_CONFIG:
+            await self._set_setting(param, value)
 
     async def reset_generation_config(self):
-        for key in ["gen_temp", "gen_top_p", "gen_top_k", "gen_max_tokens"]:
-            await self._delete_setting(key)
-        logger.info("Параметры генерации AI сброшены.")
+        for key, value in settings.DEFAULT_GENERATION_CONFIG.items():
+            await self._set_setting(key, value)
 
     async def is_debug_mode_enabled(self) -> bool:
         return await self._get_setting("debug_mode_enabled", "false", str) == "true"
@@ -340,6 +318,15 @@ class Database:
     async def toggle_debug_mode(self) -> bool:
         new_state = not await self.is_debug_mode_enabled()
         await self._set_setting("debug_mode_enabled", "true" if new_state else "false")
+        return new_state
+
+    async def is_proactive_facilitator_enabled(self) -> bool:
+        default_str = "true" if settings.DEFAULT_PROACTIVE_FACILITATOR_ENABLED else "false"
+        return await self._get_setting("proactive_facilitator_enabled", default_str, str) == "true"
+
+    async def toggle_proactive_facilitator(self) -> bool:
+        new_state = not await self.is_proactive_facilitator_enabled()
+        await self._set_setting("proactive_facilitator_enabled", "true" if new_state else "false")
         return new_state
 
     async def get_prompt(self) -> str:
@@ -382,6 +369,30 @@ class Database:
         new_state = not await self.is_moderation_enabled()
         await self._set_setting("moderation_enabled", "true" if new_state else "false")
         return new_state
+
+    async def is_soft_moderation_enabled(self) -> bool:
+        default_str = "true" if settings.DEFAULT_SOFT_MODERATION_ENABLED else "false"
+        return await self._get_setting("soft_moderation_enabled", default_str, str) == "true"
+
+    async def toggle_soft_moderation(self) -> bool:
+        new_state = not await self.is_soft_moderation_enabled()
+        await self._set_setting("soft_moderation_enabled", "true" if new_state else "false")
+        return new_state
+
+    async def is_auto_amnesty_enabled(self) -> bool:
+        default_str = "true" if settings.DEFAULT_AUTO_AMNESTY_ENABLED else "false"
+        return await self._get_setting("auto_amnesty_enabled", default_str, str) == "true"
+
+    async def toggle_auto_amnesty(self) -> bool:
+        new_state = not await self.is_auto_amnesty_enabled()
+        await self._set_setting("auto_amnesty_enabled", "true" if new_state else "false")
+        return new_state
+
+    async def get_auto_amnesty_days(self) -> int:
+        return await self._get_setting("auto_amnesty_days", settings.DEFAULT_AUTO_AMNESTY_DAYS, int)
+
+    async def set_auto_amnesty_days(self, days: int):
+        await self._set_setting("auto_amnesty_days", max(1, int(days)))
 
     async def is_welcome_enabled(self) -> bool:
         return await self._get_setting("welcome_enabled", "true", str) == "true"
@@ -490,7 +501,10 @@ class Database:
         if not self.conn:
             return
         try:
-            await self.conn.execute("INSERT OR REPLACE INTO user_warnings (user_id, count) VALUES (?, ?)", (user_id, count))
+            await self.conn.execute(
+                "INSERT OR REPLACE INTO user_warnings (user_id, count, last_warning_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
+                (user_id, count)
+            )
             await self.conn.commit()
         except aiosqlite.Error as e:
             logger.error("Ошибка БД при установке предупреждений для user_id %d: %s", user_id, e)
@@ -508,8 +522,85 @@ class Database:
         if not self.conn:
             return []
         try:
-            async with self.conn.execute("SELECT user_id, count FROM user_warnings WHERE count > 0 ORDER BY count DESC") as cursor:
+            async with self.conn.execute("SELECT user_id, count, last_warning_at FROM user_warnings WHERE count > 0 ORDER BY count DESC") as cursor:
                 return [dict(row) for row in await cursor.fetchall()]
         except aiosqlite.Error as e:
             logger.error("Ошибка БД при получении списка пользователей с предупреждениями: %s", e)
             return []
+
+    async def apply_auto_amnesty(self, days: Optional[int] = None) -> List[Dict[str, Any]]:
+        '''
+        Списывает 1 предупреждение у пользователей, у которых с момента последнего
+        предупреждения прошло не менее `days` дней.
+        '''
+        if not self.conn or not await self.is_auto_amnesty_enabled():
+            return []
+        amnesty_days = days if days is not None else await self.get_auto_amnesty_days()
+        pardoned: List[Dict[str, Any]] = []
+        try:
+            sql = (
+                "SELECT user_id, count FROM user_warnings "
+                "WHERE count > 0 AND last_warning_at <= datetime('now', ?)"
+            )
+            modifier = f"-{int(amnesty_days)} days"
+            async with self.conn.execute(sql, (modifier,)) as cursor:
+                rows = await cursor.fetchall()
+            for row in rows:
+                uid = row["user_id"]
+                new_cnt = max(0, row["count"] - 1)
+                await self.conn.execute(
+                    "UPDATE user_warnings SET count = ?, last_warning_at = CURRENT_TIMESTAMP WHERE user_id = ?",
+                    (new_cnt, uid)
+                )
+                pardoned.append({"user_id": uid, "old_count": row["count"], "new_count": new_cnt})
+            if pardoned:
+                await self.conn.commit()
+        except aiosqlite.Error as e:
+            logger.error("Ошибка БД при выполнении автоамнистии: %s", e)
+        return pardoned
+
+    # --- Методы для системы апелляций (Оспорить предупреждение) ---
+    async def create_appeal(
+        self,
+        chat_id: int,
+        user_id: int,
+        user_name: str,
+        original_text: str,
+        suggested_nvc: str = "",
+        rule_violated: str = "Ты-сообщение"
+    ) -> int:
+        if not self.conn:
+            return 0
+        try:
+            cursor = await self.conn.execute(
+                "INSERT INTO appeals (chat_id, user_id, user_name, original_text, suggested_nvc, rule_violated, status) "
+                "VALUES (?, ?, ?, ?, ?, ?, 'pending')",
+                (chat_id, user_id, user_name, original_text, suggested_nvc, rule_violated)
+            )
+            await self.conn.commit()
+            return int(cursor.lastrowid or 0)
+        except aiosqlite.Error as e:
+            logger.error("Ошибка БД при создании апелляции: %s", e)
+            return 0
+
+    async def get_appeal(self, appeal_id: int) -> Optional[Dict[str, Any]]:
+        if not self.conn:
+            return None
+        try:
+            async with self.conn.execute("SELECT * FROM appeals WHERE id = ?", (appeal_id,)) as cursor:
+                row = await cursor.fetchone()
+                return dict(row) if row else None
+        except aiosqlite.Error as e:
+            logger.error("Ошибка БД при чтении апелляции %d: %s", appeal_id, e)
+            return None
+
+    async def update_appeal_status(self, appeal_id: int, status: str) -> bool:
+        if not self.conn:
+            return False
+        try:
+            cursor = await self.conn.execute("UPDATE appeals SET status = ? WHERE id = ?", (status, appeal_id))
+            await self.conn.commit()
+            return cursor.rowcount > 0
+        except aiosqlite.Error as e:
+            logger.error("Ошибка БД при обновлении статуса апелляции %d: %s", appeal_id, e)
+            return False
