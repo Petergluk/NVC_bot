@@ -1,0 +1,18 @@
+# fly.toml app configuration file for NVC_bot
+app = "nvc-telegram-bot"
+primary_region = "ams"
+
+[build]
+  dockerfile = "Dockerfile"
+
+# Важно: убираем [http_service], так как бот работает по модели Long Polling
+# и не должен засыпать при отсутствии входящих HTTP-запросов.
+
+[mounts]
+  source = "nvc_data"
+  destination = "/app/data"
+  initial_size = "1gb"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"
