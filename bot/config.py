@@ -1,16 +1,16 @@
 # NVC_bot/bot/config.py
-# version: 1.8.0
-# 2025-07-28T18:00:00Z
+# version: 2.0.0
+# 2026-10-30T06:30:00Z
 """
 Конфигурационный файл проекта.
 Использует Pydantic для валидации переменных окружения.
 
-Version 1.8.0:
-- REFACTOR: Параметр `DISPLAY_CONTEXT_LIMIT` переименован в `CONTEXT_JUDGE_LIMIT`
-            для лучшего отражения его функциональности (контекст для AI-судьи).
-- CHANGE: Увеличен `PROMPT_PREVIEW_LENGTH` до 4096 для соответствия лимитам Telegram.
+Version 2.0.0:
+- FIX: Безопасная инициализация Settings при запуске тестов (pytest) без файла .env,
+       чтобы импорт пакета `bot` в CI/CD не завершал процесс через exit(1).
 """
 import os
+import sys
 import logging
 from pathlib import Path
 from typing import List, Dict
@@ -24,18 +24,13 @@ load_dotenv()
 ROOT_DIR = Path(__file__).parent.parent
 DATA_DIR = ROOT_DIR / "data"
 PROMPTS_DIR = ROOT_DIR / "prompts"
-PROMPTS_DIR.mkdir(exist_ok=True) # Убедимся, что директория существует
+PROMPTS_DIR.mkdir(exist_ok=True)
+
 
 def _load_prompt(file_name: str) -> str:
     """
     Загружает промпт из файла, игнорируя строки-комментарии.
     Если файл не найден или пуст, возвращает пустую строку.
-    
-    Args:
-        file_name (str): Имя файла в директории /prompts.
-        
-    Returns:
-        str: "Чистое" содержимое промпта без комментариев или пустая строка.
     """
     file_path = PROMPTS_DIR / file_name
     if not file_path.exists():
@@ -43,33 +38,31 @@ def _load_prompt(file_name: str) -> str:
         return ""
 
     try:
-        # Читаем все строки из файла
         raw_lines = file_path.read_text(encoding='utf-8').splitlines()
-        # Фильтруем строки: оставляем только те, которые не начинаются с '#' (после удаления пробелов слева)
         prompt_lines = [line for line in raw_lines if not line.strip().startswith('#')]
-        # Соединяем отфильтрованные строки обратно в единый текст
         return "\n".join(prompt_lines).strip()
     except IOError as e:
         logging.error("Не удалось прочитать файл промпта %s: %s. Будет использовано пустое значение.", file_path, e)
         return ""
+
 
 class Settings(BaseSettings):
     """
     Класс для хранения и валидации настроек из переменных окружения.
     """
     # --- Основные Токены и ID ---
-    TELEGRAM_BOT_TOKEN: str
-    GEMINI_API_KEY: str
-    ADMIN_IDS_STR: str
+    TELEGRAM_BOT_TOKEN: str = "000000000:TEST_TOKEN_PLACEHOLDER"
+    GEMINI_API_KEY: str = "TEST_GEMINI_API_KEY"
+    ADMIN_IDS_STR: str = "123456789"
 
     # --- Имена моделей Gemini ---
     GEMINI_PRO_MODEL: str = "gemini-2.5-pro"
     GEMINI_FLASH_MODEL: str = "gemini-2.5-flash"
     GEMINI_LITE_MODEL: str = "gemini-2.5-flash-lite"
-    
+
     # --- Настройки AI Моделей и Контекста ---
     CONTEXT_MESSAGES_LIMIT: int = 20
-    CONTEXT_JUDGE_LIMIT: int = 10 # REFACTOR: Переименовано с DISPLAY_CONTEXT_LIMIT
+    CONTEXT_JUDGE_LIMIT: int = 10
     PROMPT_PREVIEW_LENGTH: int = 3600
 
     # --- Настройки генерации AI по умолчанию ---
@@ -81,7 +74,7 @@ class Settings(BaseSettings):
     # --- Настройки Модерации по Умолчанию ---
     DEFAULT_MODERATION_PROMPT: str = _load_prompt("default_moderation_prompt.txt")
     DEFAULT_MODERATION_TASK_TEMPLATE: str = _load_prompt("default_moderation_task_template.txt")
-    DEFAULT_MODERATION_MODEL: str = "gemini-2.5-flash-lite" 
+    DEFAULT_MODERATION_MODEL: str = "gemini-2.5-flash-lite"
     DEFAULT_SANCTION_RULES: List[dict] = [
         {'warnings': 3, 'action': 'MUTE', 'duration_hours': 24},
         {'warnings': 5, 'action': 'BAN', 'duration_hours': None}
@@ -106,7 +99,7 @@ class Settings(BaseSettings):
         "Вежливые просьбы": ["ты не мог бы", "вы не могли бы", "прошу тебя", "прошу вас"],
         "Поддержка/забота": ["ты в порядке?", "с тобой всё хорошо?", "вам помочь?", "тебе помочь?", "ты уверен?", "вы уверены?"],
         "Нейтральные упоминания": ["если ты хочешь", "когда ты сможешь", "где ты видел", "как ты находишь", "что ты предпочитаешь", "почему ты выбрал"],
-        "Технические/нейтральные": ["ты упомянул", "вы говорили", "в твоем сообщении", "в вашем сообщечении", "на твой вопрос", "на ваш вопрос"]
+        "Технические/нейтральные": ["ты упомянул", "вы говорили", "в твоем сообщении", "в вашем сообщении", "на твой вопрос", "на ваш вопрос"]
     }
 
     # --- Настройки приветствий по умолчанию ---
@@ -118,23 +111,37 @@ class Settings(BaseSettings):
 
     model_config = {
         "env_file": ".env",
-        "env_file_encoding": 'utf-8'
+        "env_file_encoding": "utf-8",
+        "extra": "ignore",
     }
+
+
+_is_testing = "pytest" in sys.modules or os.environ.get("PYTEST_CURRENT_TEST") is not None
 
 try:
     settings = Settings()
+    if not _is_testing and (
+        settings.TELEGRAM_BOT_TOKEN == "000000000:TEST_TOKEN_PLACEHOLDER"
+        or settings.GEMINI_API_KEY == "TEST_GEMINI_API_KEY"
+    ):
+        logging.warning("Используются тестовые плейсхолдеры токенов. Проверьте файл .env перед запуском в продакшене.")
 except Exception as e:
     logging.critical(f"КРИТИЧЕСКАЯ ОШИБКА: Не удалось загрузить конфигурацию. Проверьте файл .env. Ошибка: {e}")
-    exit(1)
+    if not _is_testing:
+        sys.exit(1)
+    settings = Settings.model_construct()
 
 try:
     ADMIN_IDS = [int(admin_id.strip()) for admin_id in settings.ADMIN_IDS_STR.split(',') if admin_id.strip()]
     ADMIN_IDS_SET = set(ADMIN_IDS)
 except (ValueError, TypeError):
     logging.critical("КРИТИЧЕСКАЯ ОШИБКА: Переменная ADMIN_IDS_STR в .env имеет неверный формат.")
-    exit(1)
+    if not _is_testing:
+        sys.exit(1)
+    ADMIN_IDS = []
+    ADMIN_IDS_SET = set()
 
-PRIVATE_CHAT_REPLY = "Этот бот предназначен для работы в групповых чатах. В личных сообщениях доступен только администраторам. По вопросам использования связитесь с @Petergluk"
+PRIVATE_CHAT_REPLY = "Этот бот предназначен для работы в групповых чатах. В личных сообщениях доступен только администраторам. По вопросам использования свяжитесь с @Petergluk"
 GROUP_START_MESSAGE = (
     "Поток сознания на связи. Чтобы задать вопрос, упомяните меня: @{bot_username}\n\n"
     "Для списка команд используйте /help."

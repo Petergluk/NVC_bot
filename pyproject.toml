@@ -1,19 +1,15 @@
 # NVC_bot/pyproject.toml
-# version: 1.5
-# 2025-07-30T00:15:00Z
+# version: 2.0.0
+# 2026-10-30T06:30:00Z
 #
-# Version 1.5:
-# - FIX: Зависимость `google-generativeai` зафиксирована в диапазоне
-#   `>=0.8.5, <0.9.0` для предотвращения автоматического обновления
-#   до потенциально ломающей версии 0.9.0.
-#
-# Version 1.4:
-# - ADD: Добавлен параметр `package-mode = false` для корректной работы `poetry install`.
+# Version 2.0.0:
+# - UPGRADE: Добавлен современный SDK `google-genai` (с сохранением обратной совместимости).
+# - FIX: В dev-зависимости добавлен `pytest-asyncio` для корректного прогона асинхронных тестов.
 
 [tool.poetry]
 name = "weidehanbot"
-version = "1.0.0"
-description = "Telegram-бот для осознанной коммуникации"
+version = "2.0.0"
+description = "Telegram-бот для осознанной коммуникации (ННО / NVC)"
 authors = ["WeiDeHan Team"]
 package-mode = false
 
@@ -23,7 +19,8 @@ python-dotenv = "^1.0"
 pydantic-settings = "^2.1"
 python-telegram-bot = "^21.0"
 aiosqlite = "^0.20"
-google-generativeai = ">=0.8.5, <0.9.0"  # FIX: Зафиксирована версия
+google-genai = "^1.0.0"
+google-generativeai = ">=0.8.5, <0.9.0"
 
 [tool.poetry.group.dev.dependencies]
 black = "^24.4"
@@ -31,6 +28,7 @@ isort = "^5.13"
 flake8 = "^7.0"
 mypy = "^1.10"
 pytest = "^8.2"
+pytest-asyncio = "^0.23"
 
 [tool.black]
 line-length = 100
@@ -43,7 +41,7 @@ strict = true
 plugins = ["pydantic.mypy"]
 
 [tool.pytest.ini_options]
-asyncio_mode = "strict"
+asyncio_mode = "auto"
 filterwarnings = [
     "ignore::DeprecationWarning:google._upb._message",
 ]

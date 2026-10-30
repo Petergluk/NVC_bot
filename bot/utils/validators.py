@@ -1,48 +1,60 @@
 # NVC_bot/bot/utils/validators.py
-# version: 1.2.0
-# 2025-07-26T10:00:00Z
+# version: 2.0.0
+# 2026-10-30T06:30:00Z
 """
 Функции-валидаторы для различных частей проекта.
+
+Version 2.0.0:
+- FIX: Поддержка как одинарных `{var}`, так и двойных `{{var}}` переменных
+       во всех шаблонах промптов.
 """
-import re
 from typing import Optional, List
+
+
+def _contains_placeholder(text: str, var_name: str) -> bool:
+    """Проверяет наличие плейсхолдера `{var_name}` или `{{var_name}}` в тексте."""
+    return f"{{{var_name}}}" in text or f"{{{{{var_name}}}}}" in text
+
 
 def validate_prompt(prompt: str) -> Optional[str]:
     """
     Проверяет системный промпт на базовые требования.
-    
-    Args:
-        prompt (str): Текст системного промпта.
-        
-    Returns:
-        Optional[str]: Текст ошибки, если валидация не пройдена, иначе None.
     """
     if not prompt or len(prompt.strip()) < 50:
         return "Промпт слишком короткий. Опишите роль и задачу бота подробнее."
     return None
 
+
+def validate_moderation_prompt(prompt: str) -> Optional[str]:
+    """
+    Проверяет промпт судьи модерации на наличие переменной `{text}`.
+    """
+    if not prompt or not _contains_placeholder(prompt, "text"):
+        return "Промпт должен содержать переменную `{text}`."
+    return None
+
+
+def validate_welcome_prompt(prompt: str) -> Optional[str]:
+    """
+    Проверяет промпт приветствия на наличие переменной `{user_mention}`.
+    """
+    if not prompt or not _contains_placeholder(prompt, "user_mention"):
+        return "Промпт должен содержать переменную `{user_mention}`."
+    return None
+
+
 def validate_moderation_template(template: str) -> Optional[str]:
     """
     Проверяет шаблон сообщения о санкции на наличие обязательных переменных.
-
-    Args:
-        template (str): Текст шаблона.
-
-    Returns:
-        Optional[str]: Текст ошибки, если валидация не пройдена, иначе None.
     """
-    # ИСПРАВЛЕНИЕ: Добавлена проверка на {user_mention}
-    required_vars = [
-        "{user_mention}",
-        "{violator_message}",
-        "{warnings_count}",
-        "{rules_list}",
-        "{chat_history}"
+    required_vars: List[str] = [
+        "user_mention",
+        "violator_message",
+        "warnings_count",
+        "rules_list",
+        "chat_history"
     ]
-    missing_vars = [var for var in required_vars if var not in template]
+    missing_vars = [f"{{{var}}}" for var in required_vars if not _contains_placeholder(template, var)]
     if missing_vars:
         return f"Шаблон должен содержать следующие переменные: {', '.join(missing_vars)}"
     return None
-
-# ИСПРАВЛЕНИЕ: Функция extract_bot_mention удалена, так как ее логика
-# была упрощена и перенесена непосредственно в обработчик handle_message.

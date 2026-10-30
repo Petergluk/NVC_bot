@@ -1,67 +1,86 @@
 # NVC_bot/bot/services/gemini.py
-# version: 3.1.0
-# 2025-08-04T15:00:00Z
+# version: 4.0.0
+# 2026-10-30T06:30:00Z
 """
 Сервис-обертка для взаимодействия с Google Gemini API.
 
-Version 3.1.0:
-- FIX: Устранена ошибка `ValueError: 'content' argument must not be empty`.
-         Метод `generate_response` теперь корректно обрабатывает случаи, когда
-         `question` пуст (например, при генерации приветствия), подставляя
-         нейтральный текст для инициации ответа модели.
-
-Version 3.0.0:
-- REFACTOR: Внедрена композитная архитектура промптов.
-            - Метод `generate_response` теперь принимает `task_instruction` вместо `system_prompt`.
-            - Финальный системный промпт динамически собирается из "Ядра личности" (из БД)
-              и "Инструкции к задаче", обеспечивая консистентность поведения.
-            - Добавлена обработка переменной `{{group_rules}}` через новый
-              аргумент `chat_description`.
-- NOTE: Метод `get_moderation_verdict` намеренно не затронут и не использует
-        "Ядро личности" для сохранения своей технической точности.
+Version 4.0.0:
+- UPGRADE: Поддержка современного SDK `google-genai` (с автоматическим фоллбэком
+           на `google-generativeai`, если установлен старый пакет).
+- FIX: Использование `safe_format_template` для безопасной подстановки
+       переменных `{group_rules}` / `{{group_rules}}` и `{text}` / `{{text}}`
+       без риска падения `KeyError` на произвольных фигурных скобках.
+- ADD: Сохранение и восстановление выбранной модели Фасилитатора из БД.
 """
 import logging
 import json
 from typing import Dict, List, Optional, Tuple, Any
 
-import google.generativeai as genai
-from google.generativeai.types import GenerationConfig, content_types
-from google.generativeai import types as genai_types
+try:
+    from google import genai as modern_genai
+    from google.genai import types as modern_types
+    HAS_MODERN_GENAI = True
+except ImportError:
+    modern_genai = None
+    modern_types = None
+    HAS_MODERN_GENAI = False
+
+try:
+    import google.generativeai as legacy_genai
+    from google.generativeai.types import GenerationConfig as LegacyGenerationConfig
+    from google.generativeai import types as legacy_types
+    HAS_LEGACY_GENAI = True
+except ImportError:
+    legacy_genai = None
+    LegacyGenerationConfig = None
+    legacy_types = None
+    HAS_LEGACY_GENAI = False
 
 from ..config import settings
 from ..database import Database
+from ..utils.formatters import safe_format_template
 
 logger = logging.getLogger(__name__)
 ai_logger = logging.getLogger('ai_requests')
 
+
 class GeminiService:
     """
-    Инкапсулирует логику работы с моделями Gemini.
+    Инкапсулирует логику работы с моделями Gemini (поддерживает google-genai и google-generativeai).
     """
 
     def __init__(self, model_names: Dict[str, str], db: Database):
         self.db = db
-        try:
-            genai.configure(api_key=settings.GEMINI_API_KEY)
-            logger.info("Ключ Gemini API успешно сконфигурирован.", extra={'trace_id': 'init'})
-        except Exception as e:
-            logger.critical("КРИТИЧЕСКАЯ ОШИБКА: Не удалось сконфигурировать Gemini API.", exc_info=e, extra={'trace_id': 'init'})
-            raise
+        self.client = None
+
+        if HAS_MODERN_GENAI:
+            try:
+                self.client = modern_genai.Client(api_key=settings.GEMINI_API_KEY)
+                logger.info("Инициализирован современный SDK google-genai.", extra={'trace_id': 'init'})
+            except Exception as e:
+                logger.warning("Не удалось инициализировать google-genai Client: %s", e, extra={'trace_id': 'init'})
+
+        if not self.client and HAS_LEGACY_GENAI:
+            try:
+                legacy_genai.configure(api_key=settings.GEMINI_API_KEY)
+                logger.info("Ключ Gemini API сконфигурирован (legacy google-generativeai).", extra={'trace_id': 'init'})
+            except Exception as e:
+                logger.critical("КРИТИЧЕСКАЯ ОШИБКА: Не удалось сконфигурировать Gemini API.", exc_info=e, extra={'trace_id': 'init'})
+                raise
 
         self.model_names = model_names
-        self.models: Dict[str, str] = {}
-        for name, model_id in model_names.items():
-            try:
-                self.models[model_id] = model_id
-                logger.info("Модель '%s' зарегистрирована для использования.", model_id, extra={'trace_id': 'init'})
-            except Exception as e:
-                logger.error("Ошибка при регистрации модели %s: %s", model_id, e, extra={'trace_id': 'init'})
-        
+        self.models: Dict[str, str] = {model_id: model_id for model_id in model_names.values()}
         if not self.models:
-            logger.critical("КРИТИЧЕСКАЯ ОШИБКА: Не удалось зарегистрировать ни одну AI-модель.", extra={'trace_id': 'init'})
             raise RuntimeError("Не удалось инициализировать AI-модели.")
 
         self.current_model_id = model_names.get("pro", next(iter(self.models.keys())))
+
+    async def initialize_from_db(self) -> None:
+        """Восстанавливает сохраненную в БД основную модель Фасилитатора."""
+        saved_model = await self.db.get_facilitator_model()
+        if saved_model in self.models:
+            self.current_model_id = saved_model
+            logger.info("Основная модель Фасилитатора загружена из БД: %s", saved_model, extra={'trace_id': 'init'})
 
     def switch_model(self, model_id: str) -> bool:
         if model_id in self.models:
@@ -88,87 +107,106 @@ class GeminiService:
         question: str,
         task_instruction: str,
         trace_id: str,
-        chat_history: List[Dict] = None,
+        chat_history: Optional[List[Dict]] = None,
         user_mention: Optional[str] = None,
         model_override: Optional[str] = None,
         is_debug_mode: bool = False,
         chat_description: Optional[str] = None
     ) -> Tuple[str, Optional[Dict[str, Any]]]:
         model_id_to_use = model_override if model_override and model_override in self.models else self.current_model_id
-        
-        try:
-            # 1. Загружаем "Ядро личности"
-            core_prompt = await self.db.get_prompt()
-            
-            # 2. Подставляем в "Ядро" правила группы, если они переданы
-            if chat_description:
-                core_prompt = core_prompt.replace("{{group_rules}}", chat_description)
 
-            # 3. Собираем финальный системный промпт
+        try:
+            core_prompt = await self.db.get_prompt()
+            if chat_description:
+                core_prompt = safe_format_template(core_prompt, group_rules=chat_description)
+
             final_system_prompt = core_prompt
             if task_instruction and task_instruction.strip():
                 final_system_prompt = f"{core_prompt}\n\n---\n\n{task_instruction}"
 
-            model = genai.GenerativeModel(
-                model_name=model_id_to_use,
-                system_instruction=final_system_prompt
-            )
-            
             gen_config_dict = await self.db.get_generation_config()
-            
-            thinking_enabled_log_status = "OFF"
-            if is_debug_mode:
-                try:
-                    gen_config_dict['thinking_config'] = genai_types.ThinkingConfig(include_thoughts=True)
-                    thinking_enabled_log_status = "ON"
-                except AttributeError:
-                    logger.warning("Не удалось включить 'мысли': `ThinkingConfig` не найден в текущей версии SDK. Обновите google-generativeai.", extra={'trace_id': trace_id})
-                    thinking_enabled_log_status = "UNSUPPORTED"
-
-            generation_config = GenerationConfig(**gen_config_dict)
-            
             history = chat_history or []
-            chat_session = model.start_chat(history=history)
-            
-            # FIX: Обеспечиваем, чтобы `user_question_text` никогда не был пустым.
+
             if question:
                 user_question_text = f"Сообщение от пользователя {user_mention}: {question}" if user_mention else question
             else:
-                # Для задач без прямого вопроса (приветствие), инициируем ответ нейтральной фразой.
-                # Задача генерации уже полностью описана в `final_system_prompt`.
                 user_question_text = "Продолжай согласно инструкции."
-            
-            logger.info("Отправка запроса к модели %s (Thinking: %s)...", model_id_to_use, thinking_enabled_log_status, extra={'trace_id': trace_id})
-            
-            response = await chat_session.send_message_async(
-                content=user_question_text,
-                generation_config=generation_config
-            )
-            
-            usage_metadata_obj = getattr(response, 'usage_metadata', None)
-            full_usage_metadata = {}
-            if usage_metadata_obj:
+
+            thinking_enabled_log_status = "OFF"
+            response_text = ""
+            full_usage_metadata: Dict[str, Any] = {}
+            thoughts_log = ""
+
+            if self.client and HAS_MODERN_GENAI:
+                contents = []
+                for item in history:
+                    role = "model" if item.get("role") == "model" else "user"
+                    part_text = item.get("parts", [{}])[0].get("text", "")
+                    if part_text:
+                        contents.append(modern_types.Content(role=role, parts=[modern_types.Part.from_text(text=part_text)]))
+                contents.append(modern_types.Content(role="user", parts=[modern_types.Part.from_text(text=user_question_text)]))
+
+                config_kwargs: Dict[str, Any] = {
+                    "system_instruction": final_system_prompt,
+                    "temperature": gen_config_dict.get("temperature"),
+                    "top_p": gen_config_dict.get("top_p"),
+                    "top_k": gen_config_dict.get("top_k"),
+                    "max_output_tokens": gen_config_dict.get("max_output_tokens"),
+                }
+                if is_debug_mode and hasattr(modern_types, "ThinkingConfig"):
+                    config_kwargs["thinking_config"] = modern_types.ThinkingConfig(include_thoughts=True)
+                    thinking_enabled_log_status = "ON"
+
+                logger.info("Отправка запроса к модели %s (google-genai, Thinking: %s)...", model_id_to_use, thinking_enabled_log_status, extra={'trace_id': trace_id})
+                response = await self.client.aio.models.generate_content(
+                    model=model_id_to_use,
+                    contents=contents,
+                    config=modern_types.GenerateContentConfig(**config_kwargs)
+                )
+                response_text = response.text or ""
+                usage_obj = getattr(response, "usage_metadata", None)
+            else:
+                model = legacy_genai.GenerativeModel(
+                    model_name=model_id_to_use,
+                    system_instruction=final_system_prompt
+                )
+                if is_debug_mode:
+                    try:
+                        gen_config_dict['thinking_config'] = legacy_types.ThinkingConfig(include_thoughts=True)
+                        thinking_enabled_log_status = "ON"
+                    except AttributeError:
+                        logger.warning("`ThinkingConfig` не поддерживается в legacy SDK. Используйте google-genai.", extra={'trace_id': trace_id})
+                        thinking_enabled_log_status = "UNSUPPORTED"
+
+                generation_config = LegacyGenerationConfig(**gen_config_dict)
+                chat_session = model.start_chat(history=history)
+                logger.info("Отправка запроса к модели %s (legacy SDK, Thinking: %s)...", model_id_to_use, thinking_enabled_log_status, extra={'trace_id': trace_id})
+                response = await chat_session.send_message_async(
+                    content=user_question_text,
+                    generation_config=generation_config
+                )
+                response_text = response.text or ""
+                usage_obj = getattr(response, "usage_metadata", None)
+
+            if usage_obj:
                 all_fields = [
-                    "prompt_token_count", "cached_content_token_count", 
+                    "prompt_token_count", "cached_content_token_count",
                     "candidates_token_count", "total_token_count",
                     "tool_use_prompt_token_count", "thoughts_token_count",
                 ]
                 for field in all_fields:
-                    full_usage_metadata[field] = getattr(usage_metadata_obj, field, None)
-                logger.info("Полные метаданные об использовании токенов извлечены.", extra={'trace_id': trace_id})
-            else:
-                logger.warning("Атрибут 'usage_metadata' не найден в ответе от Gemini API.", extra={'trace_id': trace_id})
+                    full_usage_metadata[field] = getattr(usage_obj, field, None)
 
             if is_debug_mode:
                 history_str = json.dumps(history, ensure_ascii=False)
-                
-                thoughts_log = ""
                 try:
-                    if response.candidates:
+                    if getattr(response, "candidates", None):
                         for candidate in response.candidates:
                             if candidate.content and candidate.content.parts:
                                 for part in candidate.content.parts:
-                                    if hasattr(part, 'thought') and part.thought:
+                                    if getattr(part, 'thought', False) and getattr(part, 'text', None):
+                                        thoughts_log += f"\n{part.text}"
+                                    elif isinstance(getattr(part, 'thought', None), str):
                                         thoughts_log += f"\n{part.thought}"
                 except Exception as e:
                     thoughts_log = f" (ошибка извлечения: {e})"
@@ -179,7 +217,7 @@ class GeminiService:
                     f"--- FINAL SYSTEM PROMPT ({len(final_system_prompt)} chars) ---\n{final_system_prompt}\n"
                     f"--- CHAT HISTORY ({len(history_str)} chars) ---\n{self._format_history_for_log(history)}\n"
                     f"--- QUESTION ({len(user_question_text)} chars) ---\n{user_question_text}\n"
-                    f"--- THOUGHTS ---{thoughts_log if thoughts_log else ' (отсутствуют или не поддерживаются SDK)'}\n"
+                    f"--- THOUGHTS ---{thoughts_log if thoughts_log else ' (отсутствуют или не поддерживаются моделью)'}\n"
                     f"--- USAGE ---\n{json.dumps(full_usage_metadata, default=str, indent=2)}\n"
                     f"--- END REQUEST ---"
                 )
@@ -195,7 +233,7 @@ class GeminiService:
                 )
             ai_logger.info(log_message, extra={'trace_id': trace_id})
 
-            return response.text, full_usage_metadata
+            return response_text, full_usage_metadata
 
         except Exception as e:
             logger.error("Ошибка при генерации ответа от Gemini: %s", e, exc_info=True, extra={'trace_id': trace_id})
@@ -206,16 +244,27 @@ class GeminiService:
         if not model_id_to_use:
             logger.error("Модель модерации %s не найдена.", model_id, extra={'trace_id': trace_id})
             return False
-        
-        model = genai.GenerativeModel(model_id_to_use)
-        prompt = prompt_template.format(text=text)
-        
+
+        prompt = safe_format_template(prompt_template, text=text)
+
         try:
-            moderation_config = GenerationConfig(temperature=0.0, top_p=1.0, top_k=1, max_output_tokens=10)
-            response = await model.generate_content_async([prompt], generation_config=moderation_config)
-            verdict = response.text.strip().upper()
+            if self.client and HAS_MODERN_GENAI:
+                response = await self.client.aio.models.generate_content(
+                    model=model_id_to_use,
+                    contents=prompt,
+                    config=modern_types.GenerateContentConfig(
+                        temperature=0.0, top_p=1.0, top_k=1, max_output_tokens=10
+                    )
+                )
+                verdict = (response.text or "").strip().upper()
+            else:
+                model = legacy_genai.GenerativeModel(model_id_to_use)
+                moderation_config = LegacyGenerationConfig(temperature=0.0, top_p=1.0, top_k=1, max_output_tokens=10)
+                response = await model.generate_content_async([prompt], generation_config=moderation_config)
+                verdict = (response.text or "").strip().upper()
+
             logger.debug("Ответ модератора для текста '%s...': '%s'", text[:50], verdict, extra={'trace_id': trace_id})
-            return verdict == "ДА"
+            return verdict.startswith("ДА")
         except Exception as e:
             logger.error("Ошибка при получении вердикта модерации: %s", e, extra={'trace_id': trace_id})
             return False

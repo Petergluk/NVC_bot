@@ -15,7 +15,7 @@
 
 1.  **Клонируйте репозиторий:**
     ```bash
-    git clone https://github.com/ВАШ_НИКНЕЙМ/NVC_bot.git
+    git clone https://github.com/Petergluk/NVC_bot.git
     cd NVC_bot
     ```
 
