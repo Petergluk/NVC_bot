@@ -291,7 +291,7 @@ class Database:
             raise
 
     async def get_facilitator_model(self) -> str:
-        return await self._get_setting("facilitator_model", settings.GEMINI_PRO_MODEL, str)
+        return await self._get_setting("facilitator_model", settings.GEMINI_FLASH_MODEL, str)
 
     async def set_facilitator_model(self, model_name: str):
         await self._set_setting("facilitator_model", model_name)

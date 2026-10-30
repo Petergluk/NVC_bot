@@ -73,7 +73,7 @@ class GeminiService:
         if not self.models:
             raise RuntimeError("Не удалось инициализировать AI-модели.")
 
-        self.current_model_id = model_names.get("pro", next(iter(self.models.keys())))
+        self.current_model_id = model_names.get("flash", next(iter(self.models.keys())))
 
     async def initialize_from_db(self) -> None:
         """Восстанавливает сохраненную в БД основную модель Фасилитатора."""
