@@ -49,7 +49,7 @@ class GeminiService:
     Инкапсулирует логику работы с моделями Gemini (поддерживает google-genai и google-generativeai).
     """
 
-    def __init__(self, model_names: Dict[str, str], db: Database):
+    def __init__(self, model_names: Dict[str, str], db: Database, default_model: Optional[str] = None):
         self.db = db
         self.client = None
 
@@ -73,7 +73,10 @@ class GeminiService:
         if not self.models:
             raise RuntimeError("Не удалось инициализировать AI-модели.")
 
-        self.current_model_id = model_names.get("flash", next(iter(self.models.keys())))
+        if default_model and default_model in self.models:
+            self.current_model_id = default_model
+        else:
+            self.current_model_id = model_names.get("flash", next(iter(self.models.keys())))
 
     async def initialize_from_db(self) -> None:
         """Восстанавливает сохраненную в БД основную модель Фасилитатора."""

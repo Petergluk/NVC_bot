@@ -94,13 +94,11 @@ async def main() -> None:
     await db.initialize()
     await db.populate_defaults()
 
+    models_dict = {model: model for model in settings.AVAILABLE_MODELS}
     gemini_service = GeminiService(
-        model_names={
-            "pro": settings.GEMINI_PRO_MODEL,
-            "flash": settings.GEMINI_FLASH_MODEL,
-            "lite": settings.GEMINI_LITE_MODEL,
-        },
-        db=db
+        model_names=models_dict,
+        db=db,
+        default_model=settings.DEFAULT_FACILITATOR_MODEL
     )
     await gemini_service.initialize_from_db()
     moderation_service = ModerationService(db, gemini_service)

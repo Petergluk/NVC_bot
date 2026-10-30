@@ -55,10 +55,26 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = "TEST_GEMINI_API_KEY"
     ADMIN_IDS_STR: str = "123456789"
 
-    # --- Имена моделей Gemini ---
+    # --- Имена моделей Gemini (Free Tier) ---
+    AVAILABLE_MODELS: List[str] = [
+        "gemini-3.8-flash",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-flash-lite",
+        "gemini-3-flash-preview",
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
+        "gemini-2.5-pro",
+    ]
+
+    DEFAULT_FACILITATOR_MODEL: str = "gemini-3.6-flash"
+    DEFAULT_MODERATION_MODEL: str = "gemini-3.5-flash-lite"
+    DEFAULT_WELCOME_MODEL: str = "gemini-3.5-flash-lite"
+
+    # Обратная совместимость для старых переменных
     GEMINI_PRO_MODEL: str = "gemini-2.5-pro"
-    GEMINI_FLASH_MODEL: str = "gemini-2.5-flash"
-    GEMINI_LITE_MODEL: str = "gemini-2.5-flash-lite"
+    GEMINI_FLASH_MODEL: str = "gemini-3.6-flash"
+    GEMINI_LITE_MODEL: str = "gemini-3.5-flash-lite"
 
     # --- Настройки AI Моделей и Контекста ---
     CONTEXT_MESSAGES_LIMIT: int = 20

@@ -56,9 +56,9 @@ class TestWelcomeSettings:
         assert reset_prompt == settings.DEFAULT_WELCOME_PROMPT
 
     async def test_facilitator_model_persistence(self, db_session: Database):
-        assert await db_session.get_facilitator_model() == settings.GEMINI_FLASH_MODEL
-        await db_session.set_facilitator_model("gemini-2.5-flash-lite")
-        assert await db_session.get_facilitator_model() == "gemini-2.5-flash-lite"
+        assert await db_session.get_facilitator_model() == settings.DEFAULT_FACILITATOR_MODEL
+        await db_session.set_facilitator_model("gemini-3.8-flash")
+        assert await db_session.get_facilitator_model() == "gemini-3.8-flash"
 
     async def test_chat_history_includes_user_name(self, db_session: Database):
         await db_session.add_message(1001, "Алексей", "Привет всем!", is_bot=False)
