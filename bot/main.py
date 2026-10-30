@@ -136,9 +136,9 @@ async def main() -> None:
         logger.info("Получен сигнал остановки.", extra={'trace_id': 'shutdown'})
     finally:
         logger.info("Начинаю процедуру выключения...", extra={'trace_id': 'shutdown'})
-        if app.updater and app.updater.is_running:
+        if app.updater and getattr(app.updater, 'running', False):
             await app.updater.stop()
-        if app.running:
+        if getattr(app, 'running', False):
             await app.stop()
         await app.shutdown()
         await db.close()
